@@ -1,0 +1,5 @@
+backend/target/
+backend/project/target/
+backend/.bsp/
+backend/.metals/
+client/.godot/
