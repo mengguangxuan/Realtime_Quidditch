@@ -5,6 +5,8 @@ lazy val root = (project in file(".")).settings(
   Compile / mainClass := Some("services.system.Main"),
   libraryDependencies ++= Seq(
     "io.circe" %% "circe-generic" % "0.14.9",
-    "io.circe" %% "circe-parser" % "0.14.9"
+    "io.circe" %% "circe-parser" % "0.14.9",
+    "org.typelevel" %% "cats-effect" % "3.5.4",
+    "org.xerial" % "sqlite-jdbc" % "3.46.1.0"
   )
 )

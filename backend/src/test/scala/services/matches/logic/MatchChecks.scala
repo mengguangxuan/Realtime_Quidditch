@@ -1,13 +1,17 @@
 package services.matches.logic
 
+import cats.effect.unsafe.implicits.global
 import com.sun.net.httpserver.HttpServer
 import io.circe.parser.{decode, parse}
 import io.circe.syntax.*
 import java.net.{InetSocketAddress, URI}
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
+import java.nio.file.{Files, Path}
 import services.matches.api.ApplyControlMessage
 import services.matches.objects.*
 import services.matches.routes.MatchRoutes
+import services.matches.tables.timeline.{TimelineTable, TimelineTableInitializer}
+import services.system.Database
 
 object MatchChecks:
   def main(args: Array[String]): Unit =
@@ -85,13 +89,71 @@ object MatchChecks:
       case _ => false
     })
     checkHttp()
+    checkHistory()
+    checkRiderMovement(demo)
     checkShotsAndBlocks(demo)
+    checkDefensePlanning(demo)
     val solo = MatchSession.demo(computerOpponent = true, shotSeed = 42)
     assert(solo.start().isRight)
     assert(solo.submit(PlayerId("away"), Control.Charge) == Left(ActionRejection.PlayerIsComputer))
     checkControlSwitch(solo.latest.state.setup)
     assert(Iterator.fill(900)(()).map(_ => solo.advance()).exists(_.state.score.away == 10))
+    checkComputerMatch()
     println("Verified controls, catch, release, goal, restart, contact, foul, timeline and HTTP routes")
+
+  private def checkComputerMatch(): Unit =
+    val session = MatchSession.demo(computerOpponent = true, shotSeed = 42, computerHome = true)
+    val setup = session.latest.state.setup
+    assert(setup.players.forall(_.kind == PlayerKind.Computer))
+    assert(setup.roster.map(_.ratings).distinct.size == 1)
+    assert(session.start().isRight)
+    setup.players.foreach { player =>
+      assert(session.submit(player.id, Control.Charge) == Left(ActionRejection.PlayerIsComputer))
+    }
+    val frames = Iterator.fill(4000)(()).map(_ => session.advance())
+      .takeWhile(frame => !frame.state.phase.isInstanceOf[MatchPhase.Finished]).toVector
+    assert(session.latest.state.phase.isInstanceOf[MatchPhase.Finished])
+    assert(setup.roster.forall { rider =>
+      frames.exists(_.events.contains(
+        MatchEvent.QuafflePossessionChanged(QuafflePossessionOutcome.Caught(rider.id))))
+    })
+    val events = frames.flatMap(_.events)
+    val releases = events.count {
+      case MatchEvent.QuafflePossessionChanged(QuafflePossessionOutcome.Released(_, _)) => true
+      case _ => false
+    }
+    val blocks = events.count(_.isInstanceOf[MatchEvent.QuaffleBlocked])
+    val attempts = events.count(_.isInstanceOf[MatchEvent.ContactAttempted])
+    val contacts = events.count(_.isInstanceOf[MatchEvent.ContactResolved])
+    assert(attempts > 0 && contacts > 0)
+    val score = session.latest.state.score
+    println(s"CPU vs CPU (seed 42): ${score.home}-${score.away}, $releases releases, $blocks blocks, $attempts contact attempts, $contacts contacts")
+
+  private def checkRiderMovement(demo: MatchState): Unit =
+    val rider = demo.setup.roster.head
+    val facing = Direction.from(Vec3(0, 1, 0)).toOption.get
+    val stationary = demo.athletes(rider.id).copy(
+      flight = FlightState(Position(Vec3(0, 0, 7)), Velocity(Vec3.zero), facing)
+    )
+    val zero = AxisInput(0)
+    val idle = FlightInput(zero, zero, zero, false, Some(zero))
+    assert(decode[FlightInput](idle.asJson.noSpaces) == Right(idle))
+    val directions = List(
+      idle.copy(forward = AxisInput(1)) -> facing.value,
+      idle.copy(forward = AxisInput(-1)) -> (facing.value * -1),
+      idle.copy(strafe = AxisInput(1)) -> Vec3(1, 0, 0),
+      idle.copy(strafe = AxisInput(-1)) -> Vec3(-1, 0, 0)
+    )
+    directions.foreach { case (input, expected) =>
+      val moved = (1 to 5).foldLeft(stationary) { (state, _) =>
+        FlightRules.moveAthlete(rider, state, Some(input), carrying = false)
+      }
+      assert(moved.flight.facing == facing)
+      assert(moved.flight.velocity.value.dot(expected) > 0)
+    }
+    val turned = FlightRules.moveAthlete(rider, stationary,
+      Some(idle.copy(turn = Some(AxisInput(1)))), carrying = false)
+    assert(turned.flight.facing.value.x > 0 && turned.flight.velocity.value == Vec3.zero)
 
   private def checkControlSwitch(setup: MatchSetup): Unit =
     val human = setup.players.head
@@ -114,20 +176,27 @@ object MatchChecks:
     val settled = demo.athletes(home.id).copy(
       flight = FlightState(Position(Vec3(36, 0, 12)), Velocity(Vec3.zero), Direction.east),
       stability = Stability(100))
-    val good = ShotAccuracy.probability(home, settled, aim)
-    assert(ShotAccuracy.probability(home,
-      settled.copy(flight = settled.flight.copy(position = Position(Vec3(5, 0, 12)))), aim) < good)
-    assert(ShotAccuracy.probability(home,
-      settled.copy(flight = settled.flight.copy(facing = Direction.west)), aim) < good)
-    assert(ShotAccuracy.probability(home,
-      settled.copy(flight = settled.flight.copy(velocity = Velocity(Vec3(0, 20, 0)))), aim) < good)
+    val good = ShotAccuracy.standardDeviation(home, settled, aim)
+    assert(ShotAccuracy.standardDeviation(home,
+      settled.copy(flight = settled.flight.copy(position = Position(Vec3(5, 0, 12)))), aim) > good)
+    assert(ShotAccuracy.standardDeviation(home,
+      settled.copy(flight = settled.flight.copy(facing = Direction.west)), aim) > good)
+    assert(ShotAccuracy.standardDeviation(home,
+      settled.copy(flight = settled.flight.copy(velocity = Velocity(Vec3(0, 20, 0)))), aim) > good)
     val poorFinisher = home.copy(ratings = home.ratings.copy(
       throwing = home.ratings.throwing.copy(finishing = Rating(25))))
-    assert(ShotAccuracy.probability(poorFinisher, settled, aim) < good)
+    assert(ShotAccuracy.standardDeviation(poorFinisher, settled, aim) > good)
     val seed = 42L
-    assert(ShotAccuracy.direction(home, settled, aim, seed) == aim.direction)
-    assert(ShotAccuracy.direction(home, settled.copy(flight = settled.flight.copy(facing = Direction.west)),
-      aim, seed) != aim.direction)
+    def scatter(athlete: Athlete): Double =
+      val random = new scala.util.Random(123)
+      val directions = Vector.fill(400)(ShotAccuracy.direction(athlete, settled, aim, random.nextLong()).value)
+      val angle = directions.map(value => math.acos(FlightRules.clamp(value.dot(aim.direction.value), -1, 1)))
+      assert(angle.forall(_ <= ShotAccuracy.maxDeviation + 1e-9))
+      assert(math.abs(directions.map(_.y).sum / directions.size) < .01)
+      assert(math.abs(directions.map(_.z).sum / directions.size) < .01)
+      angle.sum / angle.size
+    assert(scatter(home) < scatter(poorFinisher))
+    assert(ShotAccuracy.direction(home, settled, aim, seed) == ShotAccuracy.direction(home, settled, aim, seed))
 
     def withDefender(x: Double, y: Double): MatchState =
       val defender = demo.athletes(away.id).copy(
@@ -150,6 +219,86 @@ object MatchChecks:
     val step = MatchSimulation.advance(state, live, Vector.empty, MatchSimulation.Inputs(), seed)
     assert(step.events == List(MatchEvent.QuaffleBlocked(away.id)))
     assert(step.state.score == state.score)
+
+  private def checkDefensePlanning(demo: MatchState): Unit =
+    import DefensePlanner.Decision
+    val attacker = demo.setup.roster.head
+    val defender = demo.setup.roster.last
+    def place(athlete: Athlete, point: Vec3, motion: Vec3 = Vec3.zero): AthleteState =
+      demo.athletes(athlete.id).copy(flight = FlightState(Position(point), Velocity(motion), Direction.east))
+    def scene(point: Vec3, guard: Vec3, velocity: Vec3 = Vec3.zero): MatchState =
+      demo.copy(athletes = Map(attacker.id -> place(attacker, point), defender.id -> place(defender, guard, velocity)))
+    def decision(state: MatchState): Decision = DefensePlanner.againstCarrier(state, defender, attacker.id)
+    assert(decision(scene(Vec3(0, 0, 9), Vec3(39, 0, 10))).isInstanceOf[Decision.HoldGoal])
+    assert(decision(scene(Vec3(22, 0, 9), Vec3(40, 0, 10))).isInstanceOf[Decision.CoverShotLane])
+    assert(decision(scene(Vec3(20, 0, 9), Vec3(25, 0, 9))).isInstanceOf[Decision.Press])
+    assert(decision(scene(Vec3(20, 0, 9), Vec3(22.5, 0, 9), Vec3(-7, 0, 0))).isInstanceOf[Decision.Challenge])
+    assert(!decision(scene(Vec3(20, 0, 9), Vec3(17.5, 0, 9), Vec3(7, 0, 0))).isInstanceOf[Decision.Challenge])
+
+    val late = scene(Vec3(20, 0, 9), Vec3(41, 9, 5))
+    val fast = QuaffleRules.free(Vec3(42, 0, 12), Vec3(34, 0, 0)).motion
+    assert(DefensePlanner.againstFreeBall(late, defender, fast, canUseCatch = true).isInstanceOf[Decision.HoldGoal])
+
+    val slow = QuaffleRules.free(Vec3(23, 0, 12), Vec3(16, 0, 6.95))
+    val staged = scene(Vec3(18, 0, 9), Vec3(40, 5, 10))
+    val live = MatchBalls(slow, SpecialBalls(Map.empty, None))
+    val initial = staged.copy(phase = MatchPhase.InPlay(live))
+    val assignment = staged.controls.find(_.athlete == defender.id).get
+    val plans = DefensePlanner.againstFreeBall(initial, defender, slow.motion, canUseCatch = true)
+    assert(plans.isInstanceOf[Decision.Intercept])
+    val steps = Iterator.iterate(MatchSimulation.Step(initial, Nil, MatchSimulation.Inputs())) { previous =>
+      previous.state.phase match
+        case MatchPhase.InPlay(balls) =>
+          val controls = ComputerPilot.controls(previous.state, balls, assignment).map(defender.id -> _).toVector
+          MatchSimulation.advance(previous.state, balls, controls, previous.inputs, 42)
+        case _ => previous
+    }
+    val saved = steps.take(40).find(_.events.exists {
+      case MatchEvent.QuaffleBlocked(by) => by == defender.id
+      case MatchEvent.QuafflePossessionChanged(QuafflePossessionOutcome.Caught(receiver)) => receiver == defender.id
+      case _ => false
+    })
+    assert(saved.exists(_.state.score == initial.score))
+
+  private def checkHistory(): Unit =
+    val directory = Files.createTempDirectory("quidditch-history-")
+    val path = directory.resolve("matches.sqlite3")
+    val archived = MatchId("archived")
+    val current = MatchId("current")
+    try
+      def runMatch(id: MatchId): TimelineFrame =
+        Database.connect(path).use { connection =>
+          TimelineTableInitializer.initialize(connection).map { _ =>
+            val session = MatchSession.demo(id = id,
+              recordFrame = frame => TimelineTable.insert(connection, frame).unsafeRunSync())
+            assert(session.start().isRight)
+            assert(session.submit(PlayerId("home"), Control.Charge).isRight)
+            session.advance()
+          }
+        }.unsafeRunSync()
+      val oldFrame = runMatch(archived)
+      val newFrame = runMatch(current)
+      assert(oldFrame.events.contains(MatchEvent.ContactAttempted(AthleteId(1), ContactKind.Charge)))
+      assert(oldFrame.tick == newFrame.tick && oldFrame.state.id != newFrame.state.id)
+      val server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)
+      server.createContext("/", MatchRoutes(MatchSession.demo(id = current), Some(path)))
+      server.start()
+      val client = HttpClient.newHttpClient()
+      try
+        def get(historyPath: String) =
+          val uri = URI.create(s"http://127.0.0.1:${server.getAddress.getPort}$historyPath")
+          client.send(HttpRequest.newBuilder(uri).GET().build(), HttpResponse.BodyHandlers.ofString())
+        val matches = get("/matches/history")
+        assert(matches.statusCode() == 200 && decode[List[MatchId]](matches.body()) == Right(List(current, archived)))
+        val old = get(s"/matches/history/${archived.value}/timeline/${oldFrame.tick.value}")
+        assert(old.statusCode() == 200 && decode[TimelineFrame](old.body()) == Right(oldFrame))
+        assert(get(s"/matches/history/${archived.value}/timeline/5000").statusCode() == 404)
+      finally
+        client.close()
+        server.stop(0)
+    finally
+      List(path, Path.of(s"$path-wal"), Path.of(s"$path-shm")).foreach(Files.deleteIfExists)
+      Files.delete(directory)
 
   private def checkHttp(): Unit =
     val session = MatchSession.demo()

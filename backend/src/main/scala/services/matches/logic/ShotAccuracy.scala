@@ -6,12 +6,13 @@ import FlightRules.clamp
 
 private[matches] object ShotAccuracy:
   private val pitch = Pitch.alpine
+  val maxDeviation = math.toRadians(6)
 
   def distanceToGoal(athlete: Athlete, flight: FlightState): Double =
     val goalX = if athlete.side == Side.Home then pitch.goalPlaneX else -pitch.goalPlaneX
     pitch.rings.map(ring => (Vec3(goalX, ring.y, ring.height) - flight.position.value).length).min
 
-  def probability(athlete: Athlete, state: AthleteState, aim: ShotAim): Double =
+  def standardDeviation(athlete: Athlete, state: AthleteState, aim: ShotAim): Double =
     val flight = state.flight
     val attempt = aim.direction.value
     val horizontal = Direction.from(Vec3(attempt.x, attempt.y, 0)).toOption
@@ -21,17 +22,22 @@ private[matches] object ShotAccuracy:
     val finishing = athlete.ratings.throwing.finishing.value / 100
     val balance = athlete.ratings.physical.balance.value / 100
     val instability = 1 - state.stability.value / 100
-    clamp(.97 - .47 * rangeCost - .50 * facingCost - .24 * speedCost -
-      .22 * (1 - finishing) - .08 * (1 - balance) * speedCost - .19 * instability, .04, .97)
+    val baseSpread = .65 + 3.0 * (1 - finishing)
+    val difficulty = 1 + .70 * rangeCost + .85 * facingCost + .55 * speedCost +
+      .20 * (1 - balance) * speedCost + .35 * instability
+    math.toRadians(math.min(3.6, baseSpread * difficulty))
 
   def direction(athlete: Athlete, state: AthleteState, aim: ShotAim, seed: Long): Direction =
     val random = new Random(seed)
-    if random.nextDouble() < probability(athlete, state, aim) then aim.direction
+    val sigma = standardDeviation(athlete, state, aim)
+    val (horizontal, vertical) = Iterator.fill(16)((random.nextGaussian() * sigma, random.nextGaussian() * sigma))
+      .find { case (x, y) => math.hypot(x, y) <= maxDeviation }
+      .getOrElse((0.0, 0.0))
+    val angle = math.hypot(horizontal, vertical)
+    if angle < 1e-9 then aim.direction
     else
       val intended = aim.direction.value
       val sideways = Direction.from(intended.cross(Vec3.up)).getOrElse(Direction.east).value
-      val vertical = sideways.cross(intended)
-      val horizontalError = (random.nextDouble() - .5) * .26
-      val verticalError = (if random.nextBoolean() then 1 else -1) *
-        (.13 + math.atan2(2.1, math.max(2, distanceToGoal(athlete, state.flight))))
-      Direction.from(intended + sideways * horizontalError + vertical * verticalError).getOrElse(aim.direction)
+      val up = sideways.cross(intended)
+      val tangent = (sideways * horizontal + up * vertical) * (math.sin(angle) / angle)
+      Direction.from(intended * math.cos(angle) + tangent).getOrElse(aim.direction)

@@ -21,10 +21,12 @@ private[matches] object QuaffleRules:
   def catchQuaffle(state: MatchState, athlete: Athlete, ball: QuaffleState): Boolean =
     ball match
       case QuaffleState.Free(motion) =>
-        val flight = state.athletes(athlete.id).flight
-        (flight.position.value - motion.position.value).length <= 1.6 + state.setup.balls.quaffle.radiusMeters &&
-          (flight.velocity.value - motion.velocity.value).length <= 5 + athlete.ratings.ballControl.catching.value * .15
+        canCatch(athlete, state.athletes(athlete.id).flight, motion, state.setup.balls.quaffle)
       case QuaffleState.HeldBy(_) => false
+
+  def canCatch(athlete: Athlete, flight: FlightState, motion: BallMotion, physics: BallPhysics): Boolean =
+    (flight.position.value - motion.position.value).length <= 1.6 + physics.radiusMeters &&
+      (flight.velocity.value - motion.velocity.value).length <= 5 + athlete.ratings.ballControl.catching.value * .15
 
   def shoot(state: MatchState, athlete: Athlete, aim: ShotAim, seed: Long): BallMotion =
     val athleteState = state.athletes(athlete.id)
@@ -39,22 +41,9 @@ private[matches] object QuaffleRules:
       thrower: Option[AthleteId]): BallStep =
     val physics = after.setup.balls.quaffle
     val point = motion.position.value
-    val velocity = motion.velocity.value
-    val drag = 1 / (1 + physics.dragCoefficient * velocity.length * dt / physics.massKg)
-    val curve = motion.spin.radiansPerSecond.cross(velocity) * (physics.spinLiftCoefficient / physics.massKg)
-    val nextVelocity = velocity * drag + (curve + Vec3(0, 0, -9.81)) * dt
+    val nextVelocity = velocityAfterStep(motion, physics)
     val next = point + nextVelocity * dt
-    def crosses(plane: Double): Option[Double] =
-      val t = (plane - point.x) / (next.x - point.x)
-      val y = point.y + (next.y - point.y) * t
-      val z = point.z + (next.z - point.z) * t
-      Option.when(pitch.rings.exists { ring =>
-        math.hypot(y - ring.y, z - ring.height) <= ring.innerRadius - physics.radiusMeters
-      })(t)
-    val crossing =
-      if point.x < pitch.goalPlaneX && next.x >= pitch.goalPlaneX then crosses(pitch.goalPlaneX).map(Side.Home -> _)
-      else if point.x > -pitch.goalPlaneX && next.x <= -pitch.goalPlaneX then crosses(-pitch.goalPlaneX).map(Side.Away -> _)
-      else None
+    val crossing = goalCrossing(point, next, physics)
     val block = firstHit(point, next, before, after, thrower)
       .filter(hit => crossing.forall { case (_, time) => hit.time <= time })
     block match
@@ -62,6 +51,32 @@ private[matches] object QuaffleRules:
       case None => crossing match
         case Some((side, _)) => BallStep.Scored(side)
         case None => BallStep.Moved(moveWithinPitch(motion, next, nextVelocity, physics))
+
+  def predictStep(motion: BallMotion, physics: BallPhysics): (BallMotion, Option[(Side, Vec3)]) =
+    val point = motion.position.value
+    val velocity = velocityAfterStep(motion, physics)
+    val next = point + velocity * dt
+    val goal = goalCrossing(point, next, physics)
+      .map { case (side, time) => side -> (point + (next - point) * time) }
+    (moveWithinPitch(motion, next, velocity, physics), goal)
+
+  private def velocityAfterStep(motion: BallMotion, physics: BallPhysics): Vec3 =
+    val velocity = motion.velocity.value
+    val drag = 1 / (1 + physics.dragCoefficient * velocity.length * dt / physics.massKg)
+    val curve = motion.spin.radiansPerSecond.cross(velocity) * (physics.spinLiftCoefficient / physics.massKg)
+    velocity * drag + (curve + Vec3(0, 0, -9.81)) * dt
+
+  private def goalCrossing(point: Vec3, next: Vec3, physics: BallPhysics): Option[(Side, Double)] =
+    def crosses(plane: Double): Option[Double] =
+      val t = (plane - point.x) / (next.x - point.x)
+      val y = point.y + (next.y - point.y) * t
+      val z = point.z + (next.z - point.z) * t
+      Option.when(pitch.rings.exists { ring =>
+        math.hypot(y - ring.y, z - ring.height) <= ring.innerRadius - physics.radiusMeters
+      })(t)
+    if point.x < pitch.goalPlaneX && next.x >= pitch.goalPlaneX then crosses(pitch.goalPlaneX).map(Side.Home -> _)
+    else if point.x > -pitch.goalPlaneX && next.x <= -pitch.goalPlaneX then crosses(-pitch.goalPlaneX).map(Side.Away -> _)
+    else None
 
   private def moveWithinPitch(motion: BallMotion, next: Vec3, nextVelocity: Vec3, physics: BallPhysics): BallMotion =
       val bounded = contain(next, physics.radiusMeters)
@@ -78,6 +93,9 @@ private[matches] object QuaffleRules:
       else state.score.copy(away = state.score.away + 10)
     state.copy(score = score, phase = MatchPhase.RestartPending(Restart.Kickoff(opponent(side)), balls.special))
 
+  def contactRadius(athlete: Athlete, role: AthleteRole, ballRadius: Double): Double =
+    ballRadius + (if role == AthleteRole.Keeper then .85 + athlete.ratings.goalkeeping.reach.value * .003 else .75)
+
   private final case class Hit(athlete: AthleteId, time: Double, center: Vec3, normal: Vec3, radius: Double, velocity: Vec3)
 
   private def firstHit(start: Vec3, end: Vec3, before: MatchState, after: MatchState, ignore: Option[AthleteId]): Option[Hit] =
@@ -89,9 +107,7 @@ private[matches] object QuaffleRules:
         val oldCenter = before.athletes(id).flight.position.value + Vec3(0, 0, .18)
         val newCenter = after.athletes(id).flight.position.value + Vec3(0, 0, .18)
         val movement = newCenter - oldCenter
-        val radius = ballRadius + (if after.setup.roles(id) == AthleteRole.Keeper then
-          .85 + athlete.ratings.goalkeeping.reach.value * .003
-        else .75)
+        val radius = contactRadius(athlete, after.setup.roles(id), ballRadius)
         val relative = start - oldCenter
         val delta = end - start - movement
         val a = delta.dot(delta)

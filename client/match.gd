@@ -2,8 +2,9 @@ extends Node3D
 
 const PITCH := preload("res://assets/pitch.glb")
 const RIDER := preload("res://assets/rider.glb")
-const RINGS := [Vector3(44, 8.4, 7.1), Vector3(44, 12, 0), Vector3(44, 10, -7.1)]
+const ShotGuide := preload("res://shot_guide.gd")
 const HOME_ID := "1"
+const AWAY_ID := "2"
 
 var api := MatchApi.new()
 var current_state: Dictionary = {}
@@ -13,12 +14,18 @@ var _locations: Dictionary = {}
 var _headings: Dictionary = {}
 var _camera := Camera3D.new()
 var _ball: MeshInstance3D
-var _aim_marker: MeshInstance3D
+var shot_guide := ShotGuide.new()
 var _score: Label
 var _status: Label
+var _controls: Label
+var _reticle: Control
+var _aiming := false
+var _spectating := false
+var _camera_heading := Vector3.RIGHT
 var _network := false
 var _brace := false
-var _target_ring := 1
+var _home_holds_ball := false
+var _throw_power := 80.0
 var _last_tick := -1
 
 
@@ -26,12 +33,11 @@ func _ready() -> void:
 	add_child(PITCH.instantiate())
 	_add_lighting()
 	_create_rider("1", Vector3(-23, 7, 0))
-	_create_rider("2", Vector3(23, 7, 0))
+	_create_rider(AWAY_ID, Vector3(23, 7, 0))
 	_ball = _sphere(0.27, Color(1.0, 0.52, 0.12), 1.15)
 	_ball.position = Vector3(0, 7, 0)
 	add_child(_ball)
-	_aim_marker = _sphere(0.21, Color(0.34, 1.0, 0.66), 2.0)
-	add_child(_aim_marker)
+	add_child(shot_guide)
 	_camera.fov = 67.0
 	_camera.far = 310.0
 	add_child(_camera)
@@ -45,40 +51,116 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
-	if read_keyboard:
-		api.flight({
-			"forward": _axis(KEY_W, KEY_S),
-			"strafe": _axis(KEY_A, KEY_D),
-			"climb": _axis(KEY_SPACE, KEY_C),
-			"sprint": Input.is_physical_key_pressed(KEY_SHIFT)
-		})
+	if read_keyboard and not _spectating:
+		if _home_holds_ball:
+			shot_guide.rotate_aim(_axis(KEY_RIGHT, KEY_LEFT), _axis(KEY_UP, KEY_DOWN), delta)
+		_read_flight_input()
 	var weight := 1.0 - exp(-20.0 * delta)
 	for id: String in _locations:
 		var avatar: Node3D = _roster[id]
 		var target: Vector3 = _locations[id]
 		avatar.position = target if avatar.position.distance_to(target) > 6.0 else avatar.position.lerp(target, weight)
 		avatar.rotation.y = lerp_angle(avatar.rotation.y, _headings[id], weight)
-	var home: Node3D = _roster[HOME_ID]
-	var camera_weight := 1.0 - exp(-8.0 * delta)
-	_camera.position = _camera.position.lerp(home.position + Vector3(-9.4, 3.3, 0), camera_weight)
-	_camera.look_at(home.position + Vector3(12, -2.1, 0))
 	_update_ball(weight)
+	_update_camera(delta)
 	_update_hud()
+
+
+func _read_flight_input() -> void:
+	api.flight({
+		"forward": _axis(KEY_W, KEY_S),
+		"strafe": _axis(KEY_D, KEY_A),
+		"climb": _axis(KEY_SPACE, KEY_C),
+		"turn": _axis(KEY_X, KEY_Z),
+		"sprint": Input.is_physical_key_pressed(KEY_SHIFT)
+	})
+
+
+func _update_camera(delta: float) -> void:
+	var home: Node3D = _roster[HOME_ID]
+	var aim := shot_guide.direction()
+	var desired_position: Vector3
+	var look_target: Vector3
+	if _spectating:
+		var away: Node3D = _roster[AWAY_ID]
+		var low := home.position.min(away.position)
+		var high := home.position.max(away.position)
+		if _ball.visible:
+			low = low.min(_ball.position)
+			high = high.max(_ball.position)
+		look_target = (low + high) * 0.5
+		var spread := (high - low).length()
+		desired_position = look_target + Vector3(0, 0.60, 0.80) * (28.0 + spread * 0.65)
+	elif _aiming:
+		var right := _horizontal(aim).cross(Vector3.UP)
+		var release := home.position + aim * ShotGuide.RELEASE_OFFSET
+		desired_position = home.position - aim * 4.6 + right * 1.1 + Vector3.UP * 1.35
+		var depth := 22.0
+		if aim.x > 0.05 and release.x < 44.0:
+			depth = clampf((44.0 - release.x) / aim.x, 5.0, 45.0)
+		look_target = release + aim * depth
+	else:
+		var target := home.transform.basis.z
+		var heading := lerp_angle(atan2(_camera_heading.z, _camera_heading.x),
+			atan2(target.z, target.x), 1.0 - exp(-3.5 * delta))
+		_camera_heading = Vector3(cos(heading), 0, sin(heading))
+		desired_position = home.position - _camera_heading * 11.0 + Vector3.UP * 5.1
+		look_target = home.position + _camera_heading * 10.0 - Vector3.UP * 1.3
+	desired_position.y = maxf(desired_position.y, 0.65)
+	var weight := 1.0 - exp((-18.0 if _aiming else -7.0) * delta)
+	_camera.position = _camera.position.lerp(desired_position, weight)
+	var look_direction := (look_target - _camera.position).normalized()
+	if not look_direction.is_zero_approx():
+		var up := Vector3.UP if absf(look_direction.dot(Vector3.UP)) < 0.999 else Vector3.FORWARD
+		_camera.look_at(look_target, up)
+	_camera.fov = lerpf(_camera.fov, 54.0 if _aiming else 72.0, weight)
+
+
+func _horizontal(direction: Vector3) -> Vector3:
+	return Vector3(direction.x, 0, direction.z).normalized()
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not read_keyboard or _spectating:
+		return
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_RIGHT:
+			_set_aiming(event.pressed and _home_holds_ball and _network)
+		elif event.button_index == MOUSE_BUTTON_LEFT and event.pressed and _aiming:
+			shoot()
+	elif event is InputEventMouseMotion and _aiming:
+		shot_guide.aim_with_mouse(event.screen_relative)
+
+
+func _set_aiming(active: bool) -> void:
+	if _aiming == active:
+		return
+	_aiming = active
+	_reticle.visible = active
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if active else Input.MOUSE_MODE_VISIBLE
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and _aiming:
+		_set_aiming(false)
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not read_keyboard or not event is InputEventKey or not event.pressed or event.echo:
 		return
+	if event.physical_keycode == KEY_ENTER and current_state.get("phase", {}).has("Ready"):
+		api.start_match()
+		return
+	if _spectating:
+		return
 	match event.physical_keycode:
-		KEY_ENTER:
-			if current_state.get("phase", {}).has("Ready"):
-				api.start_match()
 		KEY_E:
 			api.control({"Catch": {"target": "Quaffle"}})
 		KEY_F:
 			shoot()
 		KEY_Q:
-			_target_ring = (_target_ring + 1) % RINGS.size()
+			if _home_holds_ball:
+				_reset_aim(current_state["athletes"][HOME_ID]["flight"])
 		KEY_B:
 			_brace = not _brace
 			api.control({"Brace": {"active": _brace}})
@@ -89,19 +171,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 
 
 func shoot() -> void:
-	var athlete: Dictionary = current_state.get("athletes", {}).get(HOME_ID, {})
-	if athlete.is_empty():
+	if not _home_holds_ball:
 		return
-	var flight: Dictionary = athlete["flight"]
-	var point := _position(flight["position"]["value"])
-	var velocity := _position(flight["velocity"]["value"])
-	var ring: Vector3 = RINGS[_target_ring]
-	var travel_time := clampf(point.distance_to(ring) / 32.0, 0.12, 1.25)
-	var compensated := ring - point - velocity * travel_time + Vector3.UP * (4.905 * travel_time * travel_time)
-	var direction := compensated.normalized()
+	var direction := shot_guide.direction()
 	api.control({"Shoot": {"aim": {
 		"direction": {"x": direction.x, "y": -direction.z, "z": direction.y},
-		"power": 1.0, "spin": null
+		"power": ShotGuide.POWER, "spin": null
 	}}})
 
 
@@ -111,12 +186,31 @@ func _apply_frame(frame: Dictionary) -> void:
 		return
 	_last_tick = tick
 	current_state = frame["state"]
+	var players: Array = current_state["setup"]["players"]
+	_spectating = not players.is_empty() and players.all(func(player: Dictionary) -> bool:
+		return player["kind"] == "Computer")
+	_controls.visible = not _spectating
+	for athlete: Dictionary in current_state["setup"]["roster"]:
+		if str(int(athlete["id"])) == HOME_ID:
+			_throw_power = float(athlete["ratings"]["throwing"]["power"])
+			break
 	for id: String in current_state["athletes"]:
 		var flight: Dictionary = current_state["athletes"][id]["flight"]
 		_locations[id] = _position(flight["position"]["value"])
 		var facing := _position(flight["facing"])
 		_headings[id] = atan2(facing.x, facing.z)
 	_brace = current_state["athletes"][HOME_ID]["movement"] == "Bracing"
+	var held: Dictionary = _quaffle().get("HeldBy", {})
+	var has_ball := not _spectating and str(int(held.get("athlete", -1))) == HOME_ID
+	if has_ball and not _home_holds_ball:
+		_reset_aim(current_state["athletes"][HOME_ID]["flight"])
+	_home_holds_ball = has_ball
+	if not _home_holds_ball:
+		_set_aiming(false)
+
+
+func _reset_aim(flight: Dictionary) -> void:
+	shot_guide.set_direction(_position(flight["facing"]))
 
 
 func _quaffle() -> Dictionary:
@@ -127,8 +221,11 @@ func _update_ball(weight: float) -> void:
 	var quaffle := _quaffle()
 	_ball.visible = not quaffle.is_empty()
 	var held: Dictionary = quaffle.get("HeldBy", {})
-	_aim_marker.visible = not held.is_empty() and int(held["athlete"]) == int(HOME_ID)
-	_aim_marker.position = RINGS[_target_ring]
+	shot_guide.hide()
+	if _home_holds_ball and _network:
+		var rider: Node3D = _roster[HOME_ID]
+		var velocity := _position(current_state["athletes"][HOME_ID]["flight"]["velocity"]["value"])
+		shot_guide.show_tangent(rider.position, velocity, _throw_power)
 	if quaffle.has("Free"):
 		var goal := _position(quaffle["Free"]["motion"]["position"]["value"])
 		_ball.position = goal if _ball.position.distance_to(goal) > 5.0 else _ball.position.lerp(goal, weight)
@@ -139,12 +236,14 @@ func _update_ball(weight: float) -> void:
 
 func _update_hud() -> void:
 	if not _network:
+		_set_aiming(false)
 		_status.text = "连接 Scala 后端中…"
 		return
 	var clock: Dictionary = current_state["clock"]
 	var seconds := int(ceil((clock["durationTicks"] - clock["elapsed"]["value"]) / 20.0))
 	var score: Dictionary = current_state["score"]
-	_score.text = "你  %d   /   %d  电脑      %02d:%02d" % [
+	var caption := "绿队电脑  %d   /   %d  蓝队电脑      %02d:%02d" if _spectating else "你  %d   /   %d  电脑      %02d:%02d"
+	_score.text = caption % [
 		score["home"], score["away"], floori(seconds / 60.0), seconds % 60
 	]
 	var phase: Dictionary = current_state["phase"]
@@ -154,11 +253,17 @@ func _update_hud() -> void:
 		_status.text = "比赛暂停，即将重新开球"
 	elif phase.has("Finished"):
 		_status.text = "比赛结束"
+	elif _spectating:
+		var holder := int(_quaffle().get("HeldBy", {}).get("athlete", -1))
+		if holder < 0:
+			_status.text = "观战  ·  自由球"
+		else:
+			_status.text = "观战  ·  绿队持球" if str(holder) == HOME_ID else "观战  ·  蓝队持球"
 	else:
 		var quaffle := _quaffle()
 		if quaffle.has("HeldBy"):
 			var home_has_ball := int(quaffle["HeldBy"]["athlete"]) == int(HOME_ID)
-			_status.text = "你持球  ·  F 投向选中的球门  ·  Q 切换" if home_has_ball else "电脑持球  ·  V 冲撞"
+			_status.text = "你持球  ·  按住右键瞄准  ·  F 或左键投球" if home_has_ball else "电脑持球  ·  V 冲撞"
 		else:
 			_status.text = "追上橙色鬼飞球后按 E 接球"
 
@@ -199,13 +304,26 @@ func _create_hud() -> void:
 	hud.add_theme_constant_override("separation", 5)
 	_score = _line(hud, "", 25)
 	_status = _line(hud, "连接 Scala 后端中…", 18)
-	var controls := _line(ui, "WASD 移动   空格 / C 升降   Shift 冲刺   E 接球   F 投球   Q 切环   V 冲撞   G 拉拽   B 护球", 16)
-	controls.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	controls.offset_bottom = -16
+	_reticle = Control.new()
+	_reticle.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(_reticle)
+	_reticle.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	for rect: Rect2 in [Rect2(-10, -1, 6, 2), Rect2(4, -1, 6, 2), Rect2(-1, -10, 2, 6), Rect2(-1, 4, 2, 6)]:
+		var line := ColorRect.new()
+		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		line.color = Color(0.96, 1.0, 0.96)
+		line.position = rect.position
+		line.size = rect.size
+		_reticle.add_child(line)
+	_reticle.hide()
+	_controls = _line(ui, "WASD 移动   Z / X 转身   空格 / C 升降   Shift 冲刺   E 接球   右键瞄准   F 投球   V 冲撞   G 拉拽   B 护球", 16)
+	_controls.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	_controls.offset_bottom = -16
 
 
 func _line(parent: Node, text_value: String, size: int) -> Label:
 	var label := Label.new()
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	label.text = text_value
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", size)

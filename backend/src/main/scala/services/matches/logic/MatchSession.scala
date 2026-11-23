@@ -4,8 +4,10 @@ import java.util.concurrent.ThreadLocalRandom
 import services.matches.objects.*
 import MatchSimulation.{Inputs, begin, initialAthlete, resume, ticksPerSecond}
 
-final class MatchSession private (initial: MatchState, shotSeed: Long):
-  private var timeline = MatchTimeline(initial.id, Vector(TimelineFrame(SimulationTick(0), initial, Nil)))
+final class MatchSession private (initial: MatchState, shotSeed: Long, recordFrame: TimelineFrame => Unit):
+  private val opening = TimelineFrame(SimulationTick(0), initial, Nil)
+  recordFrame(opening)
+  private var timeline = MatchTimeline(initial.id, Vector(opening))
   private var pending = Vector.empty[(PlayerId, Control)]
   private var nextControls = Option.empty[List[ControlAssignment]]
   private var inputs = Inputs()
@@ -71,28 +73,34 @@ final class MatchSession private (initial: MatchState, shotSeed: Long):
           .flatMap(assignment => ComputerPilot.controls(active, balls, assignment).map(assignment.athlete -> _))
         val currentInputs = inputs.copy(flight = inputs.flight -- affected, contacts = inputs.contacts -- affected)
         val step = MatchSimulation.advance(active, balls, queued ++ computer, currentInputs, shotSeed)
+        val saved = append(step.state, events ++ step.events)
         pending = Vector.empty
         nextControls = None
         inputs = step.inputs
         restartTicks = 0
-        append(step.state, events ++ step.events)
+        saved
       case MatchPhase.RestartPending(restart, special) =>
-        restartTicks += 1
-        if restartTicks >= ticksPerSecond then
+        if restartTicks + 1 >= ticksPerSecond then
+          val saved = append(resume(state, restart, special), Nil)
           inputs = Inputs(shots = inputs.shots)
-          append(resume(state, restart, special), Nil)
-        else append(state, Nil)
+          saved
+        else
+          val saved = append(state, Nil)
+          restartTicks += 1
+          saved
       case MatchPhase.Ready | MatchPhase.Finished(_) => latest
   }
 
   private def append(state: MatchState, events: List[MatchEvent]): TimelineFrame =
     val saved = TimelineFrame(SimulationTick(timeline.frames.last.tick.value + 1), state, events)
+    recordFrame(saved)
     timeline = timeline.copy(frames = timeline.frames :+ saved)
     saved
 
 object MatchSession:
   def create(id: MatchId, setup: MatchSetup, durationTicks: Long,
-      shotSeed: Long = ThreadLocalRandom.current().nextLong()): Either[String, MatchSession] =
+      shotSeed: Long = ThreadLocalRandom.current().nextLong(),
+      recordFrame: TimelineFrame => Unit = _ => ()): Either[String, MatchSession] =
     val ids = setup.roster.map(_.id)
     val expectedSides = Set(Side.Home, Side.Away)
     val assigned = setup.assignments.map(_.athlete)
@@ -111,10 +119,12 @@ object MatchSession:
     yield
       val athletes = setup.roster.map(athlete => athlete.id -> initialAthlete(athlete.side)).toMap
       new MatchSession(MatchState(id, setup, setup.assignments, athletes, Score(0, 0), MatchClock(PlayTick(0), durationTicks),
-        Map.empty, MatchPhase.Ready), shotSeed)
+        Map.empty, MatchPhase.Ready), shotSeed, recordFrame)
 
   def demo(computerOpponent: Boolean = false,
-      shotSeed: Long = ThreadLocalRandom.current().nextLong()): MatchSession =
+      shotSeed: Long = ThreadLocalRandom.current().nextLong(),
+      computerHome: Boolean = false, id: MatchId = MatchId("demo"),
+      recordFrame: TimelineFrame => Unit = _ => ()): MatchSession =
     def athlete(id: Int, name: String, side: Side, speed: Int): Athlete =
       val average = Rating(70)
       Athlete(AthleteId(id), name, side, AthleteRatings(
@@ -126,12 +136,13 @@ object MatchSession:
         GoalkeepingRatings(average, average, average, average)
       ))
     val home = athlete(1, "Home Chaser", Side.Home, 85)
-    val away = athlete(2, "Away Chaser", Side.Away, 65)
+    val away = athlete(2, "Away Chaser", Side.Away, if computerHome && computerOpponent then 85 else 65)
     val allowed = ControlKind.values.toSet - ControlKind.StrikeBludger
-    val homePlayer = Player(PlayerId("home"), Side.Home, PlayerKind.Human)
+    val homePlayer = Player(PlayerId("home"), Side.Home, if computerHome then PlayerKind.Computer else PlayerKind.Human)
     val awayPlayer = Player(PlayerId("away"), Side.Away, if computerOpponent then PlayerKind.Computer else PlayerKind.Human)
     val setup = MatchSetup(List(home, away), List(homePlayer, awayPlayer),
       Map(home.id -> AthleteRole.Chaser, away.id -> AthleteRole.Chaser),
       List(ControlAssignment(homePlayer.id, home.id, allowed), ControlAssignment(awayPlayer.id, away.id, allowed)),
       BallSetup(BallPhysics(.15, .6, .002, .0001), Map.empty, None))
-    create(MatchId("demo"), setup, 180L * ticksPerSecond, shotSeed).fold(error => throw IllegalStateException(error), identity)
+    create(id, setup, 180L * ticksPerSecond, shotSeed, recordFrame)
+      .fold(error => throw IllegalStateException(error), identity)

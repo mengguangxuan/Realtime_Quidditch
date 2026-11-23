@@ -97,6 +97,7 @@ private[matches] object MatchSimulation:
           if !contacts.contains(id) then
             val kind = if control == Control.Grab then ContactKind.Grab else ContactKind.Charge
             contacts = contacts.updated(id, ContactAttempt(kind, step + 4))
+            events += MatchEvent.ContactAttempted(id, kind)
         case Control.Catch(CatchTarget.Snitch) | Control.StrikeBludger(_, _) =>
           reject(ActionRejection.BallUnavailable)
     }
@@ -124,7 +125,9 @@ private[matches] object MatchSimulation:
             (first, second, ContactKind.Incidental)
           else (second, first, ContactKind.Incidental)
         }
-      val (updated, updatedBalls, contactEvents) = contact(state, balls, initiative._1, initiative._2, initiative._3)
+      val (initiator, opponent, kind) = initiative
+      events += MatchEvent.ContactResolved(initiator.id, opponent.id, kind)
+      val (updated, updatedBalls, contactEvents) = contact(state, balls, initiator, opponent, kind)
       state = updated
       balls = updatedBalls
       events ++= contactEvents

@@ -35,7 +35,9 @@ object ShotPower:
     Encoder.encodeDouble.contramap(_.value)
   )
 
-final case class FlightInput(forward: AxisInput, strafe: AxisInput, climb: AxisInput, sprint: Boolean)
+// A turn axis selects rider-relative movement. Existing world-space callers omit it.
+final case class FlightInput(forward: AxisInput, strafe: AxisInput, climb: AxisInput, sprint: Boolean,
+    turn: Option[AxisInput] = None)
 
 object FlightInput:
   given Codec.AsObject[FlightInput] = deriveCodec[FlightInput]

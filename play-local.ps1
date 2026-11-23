@@ -1,7 +1,8 @@
 param(
     [string]$GodotExe,
     [ValidateRange(0, 65535)][int]$Port = 0,
-    [switch]$Smoke
+    [switch]$Smoke,
+    [switch]$Watch
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,8 +43,8 @@ $origin = "http://127.0.0.1:$Port"
 $runId = [Guid]::NewGuid().ToString('N')
 $backendLog = Join-Path $toolCache "backend-$runId.log"
 $backendErrors = Join-Path $toolCache "backend-$runId.err"
-$opponent = if ($Smoke) { 'human' } else { 'cpu' }
-$backendArgs = @('-cp', ('"' + $classPath + '"'), 'services.system.Main', $Port, $opponent)
+$mode = if ($Watch) { 'watch' } elseif ($Smoke) { 'human' } else { 'cpu' }
+$backendArgs = @('-cp', ('"' + $classPath + '"'), 'services.system.Main', $Port, $mode)
 if ($Smoke) { $backendArgs += '42' }
 $launchOptions = @{
     FilePath = $java
@@ -54,7 +55,13 @@ $launchOptions = @{
     RedirectStandardError = $backendErrors
     PassThru = $true
 }
-$backendProcess = Start-Process @launchOptions
+$previousDatabase = $env:QUIDDITCH_DB_PATH
+try {
+    if ($Smoke) { $env:QUIDDITCH_DB_PATH = Join-Path $serverFolder "target/smoke-$runId.sqlite3" }
+    $backendProcess = Start-Process @launchOptions
+} finally {
+    $env:QUIDDITCH_DB_PATH = $previousDatabase
+}
 $previousOrigin = $env:QUIDDITCH_BACKEND_URL
 $env:QUIDDITCH_BACKEND_URL = $origin
 try {
