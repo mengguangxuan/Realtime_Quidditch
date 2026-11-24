@@ -37,6 +37,21 @@ private[matches] object QuaffleRules:
     BallMotion(Position(flight.position.value + trajectory * .65), Velocity(flight.velocity.value + trajectory * speed),
       AngularVelocity(Vec3.up * (aim.spin.fold(0.0)(_.value) * (5 + ratings.curve.value * .2))))
 
+  def pass(state: MatchState, athlete: Athlete, receiver: AthleteId): BallMotion =
+    val from = state.athletes(athlete.id).flight
+    val to = state.athletes(receiver).flight
+    val offset = to.position.value - from.position.value
+    val speed = 11 + athlete.ratings.throwing.shortPass.value * .07
+    val time = FlightRules.clamp(offset.length / speed, .25, 1.8)
+    val target = to.position.value + to.velocity.value * time
+    val aim = target - from.position.value + Vec3.up * (4.905 * time * time)
+    val direction = Direction.from(aim).getOrElse(from.facing).value
+    val release = from.position.value + direction * math.min(.65, offset.length * .4)
+    val velocity = (target - release) * (1 / time) + Vec3.up * (4.905 * time)
+    val relative = velocity - from.velocity.value
+    val limit = 18 + athlete.ratings.throwing.longPass.value * .12
+    free(release, from.velocity.value + relative * math.min(1, limit / math.max(relative.length, 1e-9))).motion
+
   def advanceBall(motion: BallMotion, before: MatchState, after: MatchState,
       thrower: Option[AthleteId]): BallStep =
     val physics = after.setup.balls.quaffle

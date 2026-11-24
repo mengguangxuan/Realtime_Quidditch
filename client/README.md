@@ -2,7 +2,9 @@
 
 在 `Quidditch` 目录用 PowerShell 运行 `.\play-local.ps1`。它会编译 Scala 后端，启动一场人机比赛，并打开 Godot 游戏窗口。首次运行需要 JDK 和 Maven Central 依赖，默认使用本机 `E:\Godot` 中的 Godot。如路径不同，传入 `-GodotExe`。关闭游戏窗口会停止该次启动的后端。
 
-运行 `.\play-local.ps1 -Watch` 可观战。按 Enter 开赛，绿队和蓝队由同一套 AI 操控，球员属性相同。侧上方镜头会跟随双方和鬼飞球。用 `.\play-local.ps1 -Watch -Smoke` 验证观战模式。
+运行 `.\play-local.ps1 -Watch` 可观战。按 Enter 开赛，绿队和蓝队由同一套 AI 操控，球员属性来自各自的球员卡。侧上方镜头会跟随双方和鬼飞球。用 `.\play-local.ps1 -Watch -Smoke` 验证观战模式。
+
+运行 `.\play-local.ps1 -TeamSize 2` 开始两人队伍模式，可与 `-Watch` 一起用。格兰芬多为哈利和罗恩，斯莱特林为德拉科和克拉布。**R** 传给队友，**Tab** 切换操控，**E** 接球。镜头跟随选中的角色，其名字显示为金色。未选中的队友由电脑操控。
 
 | 操作 | 键位 |
 | --- | --- |

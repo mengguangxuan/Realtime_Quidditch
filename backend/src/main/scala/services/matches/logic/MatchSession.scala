@@ -2,13 +2,13 @@ package services.matches.logic
 
 import java.util.concurrent.ThreadLocalRandom
 import services.matches.objects.*
-import MatchSimulation.{Inputs, begin, initialAthlete, resume, ticksPerSecond}
+import MatchSimulation.{Inputs, begin, formation, resume, ticksPerSecond}
 
 final class MatchSession private (initial: MatchState, shotSeed: Long, recordFrame: TimelineFrame => Unit):
   private val opening = TimelineFrame(SimulationTick(0), initial, Nil)
   recordFrame(opening)
   private var timeline = MatchTimeline(initial.id, Vector(opening))
-  private var pending = Vector.empty[(PlayerId, Control)]
+  private var pending = Vector.empty[(AthleteId, Control)]
   private var nextControls = Option.empty[List[ControlAssignment]]
   private var inputs = Inputs()
   private var restartTicks = 0
@@ -27,7 +27,7 @@ final class MatchSession private (initial: MatchState, shotSeed: Long, recordFra
 
   def submit(player: PlayerId, control: Control): Either[ActionRejection, SimulationTick] = synchronized {
     val state = latest.state
-    for
+    val checked = for
       _ <- PlayerControl.human(state.setup, player)
       assignment <- nextControls.getOrElse(state.controls).find(_.player == player)
         .toRight(ActionRejection.PlayerNotInMatch)
@@ -37,9 +37,14 @@ final class MatchSession private (initial: MatchState, shotSeed: Long, recordFra
         case MatchPhase.InPlay(_) => Right(())
         case _ => Left(ActionRejection.MatchNotInPlay)
       _ <- Either.cond(pending.size < 256, (), ActionRejection.TemporarilyUnavailable)
-    yield
-      pending :+= (player -> control)
-      SimulationTick(latest.tick.value + 1)
+    yield assignment
+    checked.flatMap { assignment =>
+      control match
+        case Control.SwitchAthlete(target) => switchAthlete(player, target)
+        case _ =>
+          pending :+= (assignment.athlete -> control)
+          Right(SimulationTick(latest.tick.value + 1))
+    }
   }
 
   def switchAthlete(player: PlayerId, athlete: AthleteId): Either[ActionRejection, SimulationTick] = synchronized {
@@ -48,8 +53,10 @@ final class MatchSession private (initial: MatchState, shotSeed: Long, recordFra
       case MatchPhase.InPlay(_) =>
         val previous = nextControls.getOrElse(state.controls)
         PlayerControl.switchTo(state.setup, previous, player, athlete).map { next =>
-          val moved = next.filterNot(previous.contains).map(_.player).toSet
-          pending = pending.filterNot(entry => moved.contains(entry._1))
+          val moved = next.filterNot(previous.contains).map(_.athlete).toSet
+          pending = pending.filterNot { case (athlete, control) =>
+            moved.contains(athlete) && control.kind == ControlKind.Fly
+          }
           nextControls = Some(next)
           SimulationTick(latest.tick.value + 1)
         }
@@ -66,13 +73,13 @@ final class MatchSession private (initial: MatchState, shotSeed: Long, recordFra
         val affected = switched.flatMap(entry => List(previous(entry.player), entry.athlete)).toSet
         val events = switched.map(entry => MatchEvent.ControlChanged(entry.player, previous(entry.player), entry.athlete))
         val active = state.copy(controls = assignments)
-        val athleteByPlayer = assignments.map(assignment => assignment.player -> assignment.athlete).toMap
-        val queued = pending.map { case (player, control) => athleteByPlayer(player) -> control }
         val computerPlayers = active.setup.players.filter(_.kind == PlayerKind.Computer).map(_.id).toSet
+        val passTarget = inputs.passTarget.filter(_._2 > state.clock.elapsed.value).map(_._1)
         val computer = assignments.filter(assignment => computerPlayers.contains(assignment.player))
-          .flatMap(assignment => ComputerPilot.controls(active, balls, assignment).map(assignment.athlete -> _))
+          .flatMap(assignment => ComputerPilot.controls(active, balls, assignment, passTarget)
+            .map(assignment.athlete -> _))
         val currentInputs = inputs.copy(flight = inputs.flight -- affected, contacts = inputs.contacts -- affected)
-        val step = MatchSimulation.advance(active, balls, queued ++ computer, currentInputs, shotSeed)
+        val step = MatchSimulation.advance(active, balls, pending ++ computer, currentInputs, shotSeed)
         val saved = append(step.state, events ++ step.events)
         pending = Vector.empty
         nextControls = None
@@ -108,41 +115,39 @@ object MatchSession:
     val controllers = setup.assignments.map(_.player)
     val sides = setup.players.map(player => player.id -> player.side).toMap
     val athleteSides = setup.roster.map(athlete => athlete.id -> athlete.side).toMap
-    val valid = ids.size == 2 && ids.distinct.size == 2 && setup.roster.map(_.side).toSet == expectedSides &&
-      setup.roles.keySet == ids.toSet && assigned.size == 2 && assigned.toSet == ids.toSet &&
-      players.size == 2 && players.distinct.size == 2 && controllers.toSet == players.toSet &&
+    val valid = ids.distinct.size == ids.size &&
+      expectedSides.forall(side => setup.roster.count(_.side == side) * 2 == ids.size) &&
+      ids.nonEmpty && setup.roster.map(_.side).toSet == expectedSides &&
+      setup.roles.keySet == ids.toSet && assigned.size == ids.size && assigned.toSet == ids.toSet &&
+      players.size == ids.size && players.distinct.size == players.size && controllers.toSet == players.toSet &&
       setup.assignments.forall(assignment => sides.get(assignment.player) == athleteSides.get(assignment.athlete))
     for
-      _ <- Either.cond(valid, (), "A 1v1 match needs one athlete on each side, with unique IDs and assignments")
+      _ <- Either.cond(valid, (), "A match needs equal teams and unique athlete and player assignments")
       _ <- Either.cond(durationTicks > 0, (), "Match duration must be positive")
       _ <- Either.cond(setup.balls.bludgers.isEmpty && setup.balls.snitch.isEmpty, (), "The prototype supports the Quaffle")
     yield
-      val athletes = setup.roster.map(athlete => athlete.id -> initialAthlete(athlete.side)).toMap
+      val athletes = formation(setup.roster)
       new MatchSession(MatchState(id, setup, setup.assignments, athletes, Score(0, 0), MatchClock(PlayTick(0), durationTicks),
         Map.empty, MatchPhase.Ready), shotSeed, recordFrame)
 
-  def demo(computerOpponent: Boolean = false,
+  def demo(cards: List[Athlete], computerOpponent: Boolean = false,
       shotSeed: Long = ThreadLocalRandom.current().nextLong(),
       computerHome: Boolean = false, id: MatchId = MatchId("demo"),
-      recordFrame: TimelineFrame => Unit = _ => ()): MatchSession =
-    def athlete(id: Int, name: String, side: Side, speed: Int): Athlete =
-      val average = Rating(70)
-      Athlete(AthleteId(id), name, side, AthleteRatings(
-        FlightRatings(Rating(speed), average, average, average),
-        PhysicalRatings(average, average, average),
-        BallControlRatings(average, average, average),
-        ThrowingRatings(average, average, Rating(78), Rating(80), average),
-        AwarenessRatings(average, average, average, average),
-        GoalkeepingRatings(average, average, average, average)
-      ))
-    val home = athlete(1, "Home Chaser", Side.Home, 85)
-    val away = athlete(2, "Away Chaser", Side.Away, if computerHome && computerOpponent then 85 else 65)
+      recordFrame: TimelineFrame => Unit = _ => (), teamSize: Int = 1): MatchSession =
+    require(teamSize >= 1 && teamSize <= 2, "Demo team size must be 1 or 2")
+    val homeCards = cards.filter(_.side == Side.Home).take(teamSize)
+    val awayCards = cards.filter(_.side == Side.Away).take(teamSize)
+    require(homeCards.size == teamSize && awayCards.size == teamSize,
+      s"Each side needs $teamSize athlete cards")
+    val roster = homeCards.zip(awayCards).flatMap((home, away) => List(home, away))
     val allowed = ControlKind.values.toSet - ControlKind.StrikeBludger
     val homePlayer = Player(PlayerId("home"), Side.Home, if computerHome then PlayerKind.Computer else PlayerKind.Human)
     val awayPlayer = Player(PlayerId("away"), Side.Away, if computerOpponent then PlayerKind.Computer else PlayerKind.Human)
-    val setup = MatchSetup(List(home, away), List(homePlayer, awayPlayer),
-      Map(home.id -> AthleteRole.Chaser, away.id -> AthleteRole.Chaser),
-      List(ControlAssignment(homePlayer.id, home.id, allowed), ControlAssignment(awayPlayer.id, away.id, allowed)),
+    val players = List(homePlayer, awayPlayer) ++ roster.drop(2).map(athlete =>
+      Player(PlayerId(s"support-${athlete.id.value}"), athlete.side, PlayerKind.Computer))
+    val setup = MatchSetup(roster, players,
+      roster.map(_.id -> AthleteRole.Chaser).toMap,
+      players.zip(roster).map((player, athlete) => ControlAssignment(player.id, athlete.id, allowed)),
       BallSetup(BallPhysics(.15, .6, .002, .0001), Map.empty, None))
     create(id, setup, 180L * ticksPerSecond, shotSeed, recordFrame)
       .fold(error => throw IllegalStateException(error), identity)

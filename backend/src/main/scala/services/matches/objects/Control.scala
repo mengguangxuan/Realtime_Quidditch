@@ -4,7 +4,7 @@ import io.circe.{Codec, Decoder, Encoder, KeyDecoder, KeyEncoder}
 import io.circe.generic.semiauto.deriveCodec
 
 enum ControlKind:
-  case Fly, Brace, Catch, Shoot, Charge, Grab, StrikeBludger
+  case Fly, Brace, Catch, Shoot, Pass, SwitchAthlete, Charge, Grab, StrikeBludger
 
 object ControlKind:
   given Codec[ControlKind] = Codec.from(
@@ -61,6 +61,8 @@ enum Control(val kind: ControlKind):
   case Brace(active: Boolean) extends Control(ControlKind.Brace)
   case Catch(target: CatchTarget) extends Control(ControlKind.Catch)
   case Shoot(aim: ShotAim) extends Control(ControlKind.Shoot)
+  case Pass(receiver: AthleteId) extends Control(ControlKind.Pass)
+  case SwitchAthlete(athlete: AthleteId) extends Control(ControlKind.SwitchAthlete)
   case Charge extends Control(ControlKind.Charge)
   case Grab extends Control(ControlKind.Grab)
   case StrikeBludger(ball: BludgerId, direction: Direction) extends Control(ControlKind.StrikeBludger)

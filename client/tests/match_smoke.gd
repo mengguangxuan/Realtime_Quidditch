@@ -28,6 +28,9 @@ func _run() -> void:
 	if not await _until(func() -> bool: return int(game._quaffle().get("HeldBy", {}).get("athlete", -1)) == 1, 3.0):
 		_fail("Catch command did not give the Godot rider possession")
 		return
+	if game._roster.size() == 4:
+		await _check_team_play()
+		return
 	if not await _fly_to(Vector3(36, 7.1, 10)):
 		_fail("Could not move to shooting distance")
 		return
@@ -68,12 +71,35 @@ func _run() -> void:
 	quit(0)
 
 
+func _check_team_play() -> void:
+	if game._teammate_id != "3" or not game._roster.has("4"):
+		_fail("The four-player lineup was not loaded")
+		return
+	game.pass_to_teammate()
+	game.switch_teammate()
+	if not await _until(func() -> bool: return game._selected_id == "3", 2.0):
+		_fail("Tab control did not transfer to Ron")
+		return
+	for attempt in 40:
+		if int(game._quaffle().get("HeldBy", {}).get("athlete", -1)) == 3:
+			game.shoot()
+			if not await _until(func() -> bool: return game._quaffle().has("Free"), 2.0):
+				_fail("Ron could not shoot after accepting the pass")
+				return
+			print("Godot ↔ Scala passed: four riders, pass, control switch, teammate catch and shot")
+			quit(0)
+			return
+		game.api.control({"Catch": {"target": "Quaffle"}})
+		await create_timer(0.05).timeout
+	_fail("The passed Quaffle was not caught by Ron")
+
+
 func _check_spectator() -> void:
 	if not await _until(func() -> bool: return game._quaffle().has("HeldBy"), 8.0):
 		_fail("Neither computer caught the Quaffle")
 		return
 	var camera: Camera3D = game._camera
-	for id: String in ["1", "2"]:
+	for id: String in game._roster:
 		var rider: Node3D = game._roster[id]
 		if not camera.get_frustum().all(func(plane: Plane) -> bool:
 			return not plane.is_point_over(rider.position)

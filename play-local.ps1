@@ -1,6 +1,7 @@
 param(
     [string]$GodotExe,
     [ValidateRange(0, 65535)][int]$Port = 0,
+    [ValidateRange(1, 2)][int]$TeamSize = 1,
     [switch]$Smoke,
     [switch]$Watch
 )
@@ -45,7 +46,8 @@ $backendLog = Join-Path $toolCache "backend-$runId.log"
 $backendErrors = Join-Path $toolCache "backend-$runId.err"
 $mode = if ($Watch) { 'watch' } elseif ($Smoke) { 'human' } else { 'cpu' }
 $backendArgs = @('-cp', ('"' + $classPath + '"'), 'services.system.Main', $Port, $mode)
-if ($Smoke) { $backendArgs += '42' }
+$seedArgument = if ($Smoke) { '42' } else { 'random' }
+$backendArgs += @($seedArgument, $TeamSize)
 $launchOptions = @{
     FilePath = $java
     ArgumentList = $backendArgs

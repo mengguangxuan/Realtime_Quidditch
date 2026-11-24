@@ -11,6 +11,7 @@ import scala.util.control.NonFatal
 import services.matches.logic.MatchSession
 import services.matches.objects.MatchId
 import services.matches.routes.MatchRoutes
+import services.matches.tables.athletecard.{AthleteCardTable, AthleteCardTableInitializer}
 import services.matches.tables.timeline.{TimelineTable, TimelineTableInitializer}
 
 object Main:
@@ -20,6 +21,8 @@ object Main:
     val computerHome = mode.contains("watch")
     val computerOpponent = computerHome || mode.contains("cpu")
     val shotSeed = args.lift(2).flatMap(_.toLongOption).getOrElse(ThreadLocalRandom.current().nextLong())
+    val teamSize = args.lift(3).fold(1)(_.toInt)
+    require(teamSize >= 1 && teamSize <= 2, "Demo team size must be 1 or 2")
     val path = Database.path
     val stopped = CountDownLatch(1)
     val closed = CountDownLatch(1)
@@ -30,13 +33,18 @@ object Main:
     }))
     try
       Database.connect(path).use { connection =>
-        TimelineTableInitializer.initialize(connection) *> IO.blocking {
-          val id = MatchId(UUID.randomUUID().toString)
-          val session = MatchSession.demo(computerOpponent, shotSeed, computerHome, id,
-            frame => TimelineTable.insert(connection, frame).unsafeRunSync())
-          println(s"Recording match ${id.value} in $path")
-          serve(port, session, path, stopped)
-        }
+        for
+          _ <- TimelineTableInitializer.initialize(connection)
+          _ <- AthleteCardTableInitializer.initialize(connection)
+          cards <- AthleteCardTable.list(connection)
+          _ <- IO.blocking {
+            val id = MatchId(UUID.randomUUID().toString)
+            val session = MatchSession.demo(cards, computerOpponent, shotSeed, computerHome, id,
+              frame => TimelineTable.insert(connection, frame).unsafeRunSync(), teamSize)
+            println(s"Recording match ${id.value} in $path")
+            serve(port, session, path, stopped)
+          }
+        yield ()
       }.unsafeRunSync()
     finally closed.countDown()
 

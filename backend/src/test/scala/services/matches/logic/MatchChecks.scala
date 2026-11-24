@@ -1,5 +1,6 @@
 package services.matches.logic
 
+import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import com.sun.net.httpserver.HttpServer
 import io.circe.parser.{decode, parse}
@@ -7,15 +8,27 @@ import io.circe.syntax.*
 import java.net.{InetSocketAddress, URI}
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.nio.file.{Files, Path}
+import java.sql.DriverManager
+import scala.util.Using
 import services.matches.api.ApplyControlMessage
 import services.matches.objects.*
 import services.matches.routes.MatchRoutes
+import services.matches.tables.athletecard.{AthleteCardTable, AthleteCardTableInitializer}
 import services.matches.tables.timeline.{TimelineTable, TimelineTableInitializer}
 import services.system.Database
 
 object MatchChecks:
+  private lazy val cards = Using.resource(DriverManager.getConnection("jdbc:sqlite::memory:")) { connection =>
+    (AthleteCardTableInitializer.initialize(connection) *> AthleteCardTable.list(connection)).unsafeRunSync()
+  }
+
   def main(args: Array[String]): Unit =
-    val matchSession = MatchSession.demo(shotSeed = 42)
+    val matchSession = MatchSession.demo(cards, shotSeed = 42)
+    assert(matchSession.latest.state.setup.roster == cards.take(2))
+    val roster = MatchSession.demo(cards, teamSize = 2).latest.state.setup.roster
+    assert(roster == cards)
+    assert(roster.map(_.id).distinct.size == 4 && roster.map(_.ratings).distinct.size == 4)
+    assert(roster.count(_.side == Side.Home) == 2 && roster.count(_.side == Side.Away) == 2)
     val home = PlayerId("home")
     val homeAthlete = AthleteId(1)
     assert(matchSession.latest.tick == SimulationTick(0))
@@ -93,7 +106,7 @@ object MatchChecks:
     checkRiderMovement(demo)
     checkShotsAndBlocks(demo)
     checkDefensePlanning(demo)
-    val solo = MatchSession.demo(computerOpponent = true, shotSeed = 42)
+    val solo = MatchSession.demo(cards, computerOpponent = true, shotSeed = 42)
     assert(solo.start().isRight)
     assert(solo.submit(PlayerId("away"), Control.Charge) == Left(ActionRejection.PlayerIsComputer))
     checkControlSwitch(solo.latest.state.setup)
@@ -102,7 +115,8 @@ object MatchChecks:
     println("Verified controls, catch, release, goal, restart, contact, foul, timeline and HTTP routes")
 
   private def checkComputerMatch(): Unit =
-    val session = MatchSession.demo(computerOpponent = true, shotSeed = 42, computerHome = true)
+    val equalCards = cards.map(_.copy(ratings = cards.head.ratings))
+    val session = MatchSession.demo(equalCards, computerOpponent = true, shotSeed = 42, computerHome = true)
     val setup = session.latest.state.setup
     assert(setup.players.forall(_.kind == PlayerKind.Computer))
     assert(setup.roster.map(_.ratings).distinct.size == 1)
@@ -268,20 +282,35 @@ object MatchChecks:
     try
       def runMatch(id: MatchId): TimelineFrame =
         Database.connect(path).use { connection =>
-          TimelineTableInitializer.initialize(connection).map { _ =>
-            val session = MatchSession.demo(id = id,
+          for
+            _ <- TimelineTableInitializer.initialize(connection)
+            _ <- AthleteCardTableInitializer.initialize(connection)
+            loaded <- AthleteCardTable.list(connection)
+          yield
+            val session = MatchSession.demo(loaded, id = id,
               recordFrame = frame => TimelineTable.insert(connection, frame).unsafeRunSync())
             assert(session.start().isRight)
             assert(session.submit(PlayerId("home"), Control.Charge).isRight)
             session.advance()
-          }
         }.unsafeRunSync()
       val oldFrame = runMatch(archived)
+      Database.connect(path).use { connection =>
+        IO.blocking {
+          Using.resource(connection.createStatement()) { statement =>
+            val changed = statement.executeUpdate(
+              "UPDATE athlete_cards SET card = json_set(card, '$.ratings.flight.speed', 92) WHERE athlete_id = 1"
+            )
+            assert(changed == 1)
+          }
+        }
+      }.unsafeRunSync()
       val newFrame = runMatch(current)
+      assert(oldFrame.state.setup.roster.head.ratings.flight.speed == Rating(85))
+      assert(newFrame.state.setup.roster.head.ratings.flight.speed == Rating(92))
       assert(oldFrame.events.contains(MatchEvent.ContactAttempted(AthleteId(1), ContactKind.Charge)))
       assert(oldFrame.tick == newFrame.tick && oldFrame.state.id != newFrame.state.id)
       val server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)
-      server.createContext("/", MatchRoutes(MatchSession.demo(id = current), Some(path)))
+      server.createContext("/", MatchRoutes(MatchSession.demo(cards, id = current), Some(path)))
       server.start()
       val client = HttpClient.newHttpClient()
       try
@@ -301,7 +330,7 @@ object MatchChecks:
       Files.delete(directory)
 
   private def checkHttp(): Unit =
-    val session = MatchSession.demo()
+    val session = MatchSession.demo(cards)
     val server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)
     server.createContext("/", MatchRoutes(session))
     server.start()

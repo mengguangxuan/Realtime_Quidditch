@@ -3,13 +3,14 @@ extends Node3D
 const PITCH := preload("res://assets/pitch.glb")
 const RIDER := preload("res://assets/rider.glb")
 const ShotGuide := preload("res://shot_guide.gd")
-const HOME_ID := "1"
-const AWAY_ID := "2"
-
 var api := MatchApi.new()
 var current_state: Dictionary = {}
 var read_keyboard := true
 var _roster: Dictionary = {}
+var _labels: Dictionary = {}
+var _sides: Dictionary = {}
+var _selected_id := ""
+var _teammate_id := ""
 var _locations: Dictionary = {}
 var _headings: Dictionary = {}
 var _camera := Camera3D.new()
@@ -32,8 +33,6 @@ var _last_tick := -1
 func _ready() -> void:
 	add_child(PITCH.instantiate())
 	_add_lighting()
-	_create_rider("1", Vector3(-23, 7, 0))
-	_create_rider(AWAY_ID, Vector3(23, 7, 0))
 	_ball = _sphere(0.27, Color(1.0, 0.52, 0.12), 1.15)
 	_ball.position = Vector3(0, 7, 0)
 	add_child(_ball)
@@ -77,14 +76,18 @@ func _read_flight_input() -> void:
 
 
 func _update_camera(delta: float) -> void:
-	var home: Node3D = _roster[HOME_ID]
+	if not _roster.has(_selected_id):
+		return
+	var home: Node3D = _roster[_selected_id]
 	var aim := shot_guide.direction()
 	var desired_position: Vector3
 	var look_target: Vector3
 	if _spectating:
-		var away: Node3D = _roster[AWAY_ID]
-		var low := home.position.min(away.position)
-		var high := home.position.max(away.position)
+		var low := home.position
+		var high := home.position
+		for rider: Node3D in _roster.values():
+			low = low.min(rider.position)
+			high = high.max(rider.position)
 		if _ball.visible:
 			low = low.min(_ball.position)
 			high = high.max(_ball.position)
@@ -158,9 +161,13 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			api.control({"Catch": {"target": "Quaffle"}})
 		KEY_F:
 			shoot()
+		KEY_R:
+			pass_to_teammate()
+		KEY_TAB:
+			switch_teammate()
 		KEY_Q:
 			if _home_holds_ball:
-				_reset_aim(current_state["athletes"][HOME_ID]["flight"])
+				_reset_aim(current_state["athletes"][_selected_id]["flight"])
 		KEY_B:
 			_brace = not _brace
 			api.control({"Brace": {"active": _brace}})
@@ -180,6 +187,16 @@ func shoot() -> void:
 	}}})
 
 
+func pass_to_teammate() -> void:
+	if _home_holds_ball and not _teammate_id.is_empty():
+		api.control({"Pass": {"receiver": int(_teammate_id)}})
+
+
+func switch_teammate() -> void:
+	if not _teammate_id.is_empty():
+		api.control({"SwitchAthlete": {"athlete": int(_teammate_id)}})
+
+
 func _apply_frame(frame: Dictionary) -> void:
 	var tick := int(frame["tick"]["value"])
 	if tick == _last_tick:
@@ -190,20 +207,40 @@ func _apply_frame(frame: Dictionary) -> void:
 	_spectating = not players.is_empty() and players.all(func(player: Dictionary) -> bool:
 		return player["kind"] == "Computer")
 	_controls.visible = not _spectating
-	for athlete: Dictionary in current_state["setup"]["roster"]:
-		if str(int(athlete["id"])) == HOME_ID:
-			_throw_power = float(athlete["ratings"]["throwing"]["power"])
+	var previous_selection := _selected_id
+	for assignment: Dictionary in current_state["controls"]:
+		if assignment["player"] == "home":
+			_selected_id = str(int(assignment["athlete"]))
 			break
+	if previous_selection != _selected_id:
+		api.resend_flight()
+		_set_aiming(false)
+		_home_holds_ball = false
+	var lineup: Array = current_state["setup"]["roster"]
+	_teammate_id = ""
+	_controls.text = "WASD 移动   Z / X 转身   空格 / C 升降   E 接球   F 投球   R 传球   Tab 切换   V 冲撞" if lineup.size() > 2 else _controls_default
+	for athlete: Dictionary in lineup:
+		var id := str(int(athlete["id"]))
+		var flight: Dictionary = current_state["athletes"][id]["flight"]
+		_sides[id] = athlete["side"]
+		if not _roster.has(id):
+			_create_rider(id, _position(flight["position"]["value"]), athlete["name"], lineup.size() > 2)
+		var label: Label3D = _labels[id]
+		label.modulate = Color.GOLD if id == _selected_id and not _spectating else Color.WHITE
+		if id == _selected_id:
+			_throw_power = float(athlete["ratings"]["throwing"]["power"])
+		elif athlete["side"] == "Home":
+			_teammate_id = id
 	for id: String in current_state["athletes"]:
 		var flight: Dictionary = current_state["athletes"][id]["flight"]
 		_locations[id] = _position(flight["position"]["value"])
 		var facing := _position(flight["facing"])
 		_headings[id] = atan2(facing.x, facing.z)
-	_brace = current_state["athletes"][HOME_ID]["movement"] == "Bracing"
+	_brace = current_state["athletes"][_selected_id]["movement"] == "Bracing"
 	var held: Dictionary = _quaffle().get("HeldBy", {})
-	var has_ball := not _spectating and str(int(held.get("athlete", -1))) == HOME_ID
+	var has_ball := not _spectating and str(int(held.get("athlete", -1))) == _selected_id
 	if has_ball and not _home_holds_ball:
-		_reset_aim(current_state["athletes"][HOME_ID]["flight"])
+		_reset_aim(current_state["athletes"][_selected_id]["flight"])
 	_home_holds_ball = has_ball
 	if not _home_holds_ball:
 		_set_aiming(false)
@@ -223,8 +260,8 @@ func _update_ball(weight: float) -> void:
 	var held: Dictionary = quaffle.get("HeldBy", {})
 	shot_guide.hide()
 	if _home_holds_ball and _network:
-		var rider: Node3D = _roster[HOME_ID]
-		var velocity := _position(current_state["athletes"][HOME_ID]["flight"]["velocity"]["value"])
+		var rider: Node3D = _roster[_selected_id]
+		var velocity := _position(current_state["athletes"][_selected_id]["flight"]["velocity"]["value"])
 		shot_guide.show_tangent(rider.position, velocity, _throw_power)
 	if quaffle.has("Free"):
 		var goal := _position(quaffle["Free"]["motion"]["position"]["value"])
@@ -258,24 +295,38 @@ func _update_hud() -> void:
 		if holder < 0:
 			_status.text = "观战  ·  自由球"
 		else:
-			_status.text = "观战  ·  绿队持球" if str(holder) == HOME_ID else "观战  ·  蓝队持球"
+			_status.text = "观战  ·  绿队持球" if _sides[str(holder)] == "Home" else "观战  ·  蓝队持球"
 	else:
 		var quaffle := _quaffle()
 		if quaffle.has("HeldBy"):
-			var home_has_ball := int(quaffle["HeldBy"]["athlete"]) == int(HOME_ID)
-			_status.text = "你持球  ·  按住右键瞄准  ·  F 或左键投球" if home_has_ball else "电脑持球  ·  V 冲撞"
+			var holder_id := str(int(quaffle["HeldBy"]["athlete"]))
+			if holder_id == _selected_id:
+				_status.text = "你持球  ·  按住右键瞄准  ·  F 或左键投球"
+			elif holder_id == _teammate_id:
+				_status.text = "队友持球  ·  Tab 切换"
+			else:
+				_status.text = "对手持球  ·  V 冲撞"
 		else:
 			_status.text = "追上橙色鬼飞球后按 E 接球"
 
 
-func _create_rider(id: String, initial: Vector3) -> void:
+func _create_rider(id: String, initial: Vector3, rider_name: String, show_name: bool) -> void:
 	var avatar: Node3D = RIDER.instantiate()
 	add_child(avatar)
 	avatar.position = initial
-	avatar.rotation.y = PI / 2.0 if id == HOME_ID else -PI / 2.0
-	var badge := _sphere(0.20, Color(0.36, 1.0, 0.57) if id == HOME_ID else Color(0.30, 0.66, 1.0), 1.0)
+	var home: bool = _sides[id] == "Home"
+	avatar.rotation.y = PI / 2.0 if home else -PI / 2.0
+	var badge := _sphere(0.20, Color(0.36, 1.0, 0.57) if home else Color(0.30, 0.66, 1.0), 1.0)
 	avatar.add_child(badge)
 	badge.position = Vector3(0, 1.4, 0)
+	var label := Label3D.new()
+	label.text = rider_name
+	label.position = Vector3(0, 1.95, 0)
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.pixel_size = 0.005
+	label.visible = show_name
+	avatar.add_child(label)
+	_labels[id] = label
 	_roster[id] = avatar
 
 
@@ -293,6 +344,9 @@ func _add_lighting() -> void:
 	environment.environment.ambient_light_color = Color(0.83, 0.89, 1)
 	environment.environment.ambient_light_energy = 0.72
 	add_child(environment)
+
+
+const _controls_default := "WASD 移动   Z / X 转身   空格 / C 升降   Shift 冲刺   E 接球   右键瞄准   F 投球   V 冲撞   G 拉拽   B 护球"
 
 
 func _create_hud() -> void:
@@ -316,7 +370,7 @@ func _create_hud() -> void:
 		line.size = rect.size
 		_reticle.add_child(line)
 	_reticle.hide()
-	_controls = _line(ui, "WASD 移动   Z / X 转身   空格 / C 升降   Shift 冲刺   E 接球   右键瞄准   F 投球   V 冲撞   G 拉拽   B 护球", 16)
+	_controls = _line(ui, _controls_default, 16)
 	_controls.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	_controls.offset_bottom = -16
 

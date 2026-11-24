@@ -22,6 +22,7 @@ enum MatchEvent:
   case QuafflePossessionChanged(outcome: QuafflePossessionOutcome)
   case QuaffleGoal(scoringSide: Side)
   case QuaffleBlocked(by: AthleteId)
+  case QuafflePassed(by: AthleteId, receiver: AthleteId)
   case ContactAttempted(athlete: AthleteId, kind: ContactKind)
   case ContactResolved(athlete: AthleteId, opponent: AthleteId, kind: ContactKind)
   case ControlChanged(player: PlayerId, from: AthleteId, to: AthleteId)

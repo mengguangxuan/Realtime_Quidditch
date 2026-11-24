@@ -56,6 +56,10 @@ func flight(input: Dictionary) -> void:
 	_wanted_flight = input
 
 
+func resend_flight() -> void:
+	_last_flight = {}
+
+
 func control(action: Dictionary) -> void:
 	if _in_play and _outgoing.size() < 12:
 		_outgoing.append(action)
