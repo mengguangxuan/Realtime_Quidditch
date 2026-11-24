@@ -87,12 +87,16 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Godot integration check failed' }
     } else {
         $imports = Join-Path $project '.godot/imported'
-        if (-not (Get-ChildItem -LiteralPath $imports -Filter 'rider.glb-*.scn' -ErrorAction SilentlyContinue)) {
+        $requiredModels = @('rider', 'pitch', 'broom', 'athlete_1', 'athlete_2', 'athlete_3', 'athlete_4')
+        $missingModels = $requiredModels | Where-Object {
+            -not (Get-ChildItem -LiteralPath $imports -Filter "$_.glb-*.scn" -ErrorAction SilentlyContinue)
+        }
+        if ($missingModels) {
             $import = Start-Process -FilePath $GodotExe -ArgumentList @('--headless', '--path', ('"' + $project + '"'), '--editor', '--import', '--quit') -WindowStyle Hidden -PassThru -Wait
             if ($import.ExitCode -ne 0) { throw 'Godot could not import the project' }
         }
         $game = Start-Process -FilePath $GodotExe -ArgumentList @('--path', ('"' + $project + '"')) -WindowStyle Normal -PassThru
-        Write-Host "Godot process: $($game.Id). Press Enter in the game to begin."
+        Write-Host "Godot process: $($game.Id). Sign in to choose the match mode and starting rider."
         $game.WaitForExit()
         if ($game.ExitCode -ne 0) { throw "Godot exited with code $($game.ExitCode)" }
     }

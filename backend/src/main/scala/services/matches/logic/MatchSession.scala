@@ -19,9 +19,12 @@ final class MatchSession private (initial: MatchState, shotSeed: Long, recordFra
     Option.when(tick.value >= 0 && tick.value < timeline.frames.size)(timeline.frames(tick.value.toInt))
   }
 
-  def start(): Either[ActionRejection, TimelineFrame] = synchronized {
+  def start(lineup: Option[MatchSetup] = None): Either[ActionRejection, TimelineFrame] = synchronized {
     latest.state.phase match
-      case MatchPhase.Ready => Right(append(begin(latest.state), Nil))
+      case MatchPhase.Ready =>
+        val state = lineup.fold(latest.state)(setup => latest.state.copy(
+          setup = setup, controls = setup.assignments, athletes = formation(setup.roster)))
+        Right(append(begin(state), Nil))
       case _ => Left(ActionRejection.TemporarilyUnavailable)
   }
 
@@ -134,20 +137,26 @@ object MatchSession:
       shotSeed: Long = ThreadLocalRandom.current().nextLong(),
       computerHome: Boolean = false, id: MatchId = MatchId("demo"),
       recordFrame: TimelineFrame => Unit = _ => (), teamSize: Int = 1): MatchSession =
-    require(teamSize >= 1 && teamSize <= 2, "Demo team size must be 1 or 2")
-    val homeCards = cards.filter(_.side == Side.Home).take(teamSize)
+    val setup = demoSetup(cards, computerOpponent, computerHome, teamSize, None)
+      .fold(error => throw IllegalArgumentException(error), identity)
+    create(id, setup, 180L * ticksPerSecond, shotSeed, recordFrame)
+      .fold(error => throw IllegalStateException(error), identity)
+
+  def demoSetup(cards: List[Athlete], computerOpponent: Boolean, computerHome: Boolean,
+      teamSize: Int, selection: Option[AthleteId]): Either[String, MatchSetup] =
+    val home = cards.filter(_.side == Side.Home)
+    if teamSize < 1 || teamSize > 2 then return Left("Team size must be 1 or 2")
+    if selection.exists(id => !home.exists(_.id == id)) then return Left("Choose a home athlete card")
+    val homeCards = home.sortBy(athlete => !selection.contains(athlete.id)).take(teamSize)
     val awayCards = cards.filter(_.side == Side.Away).take(teamSize)
-    require(homeCards.size == teamSize && awayCards.size == teamSize,
-      s"Each side needs $teamSize athlete cards")
+    if homeCards.size != teamSize || awayCards.size != teamSize then return Left(s"Each side needs $teamSize athlete cards")
     val roster = homeCards.zip(awayCards).flatMap((home, away) => List(home, away))
     val allowed = ControlKind.values.toSet - ControlKind.StrikeBludger
     val homePlayer = Player(PlayerId("home"), Side.Home, if computerHome then PlayerKind.Computer else PlayerKind.Human)
     val awayPlayer = Player(PlayerId("away"), Side.Away, if computerOpponent then PlayerKind.Computer else PlayerKind.Human)
     val players = List(homePlayer, awayPlayer) ++ roster.drop(2).map(athlete =>
       Player(PlayerId(s"support-${athlete.id.value}"), athlete.side, PlayerKind.Computer))
-    val setup = MatchSetup(roster, players,
+    Right(MatchSetup(roster, players,
       roster.map(_.id -> AthleteRole.Chaser).toMap,
       players.zip(roster).map((player, athlete) => ControlAssignment(player.id, athlete.id, allowed)),
-      BallSetup(BallPhysics(.15, .6, .002, .0001), Map.empty, None))
-    create(id, setup, 180L * ticksPerSecond, shotSeed, recordFrame)
-      .fold(error => throw IllegalStateException(error), identity)
+      BallSetup(BallPhysics(.15, .6, .002, .0001), Map.empty, None)))

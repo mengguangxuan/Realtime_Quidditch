@@ -21,7 +21,7 @@ private[matches] object FlightRules:
     val ratings = athlete.ratings
     val bracing = previous.movement == MovementMode.Bracing
     val sprinting = !bracing && previous.stamina.value > 0 && input.exists(_.sprint)
-    val limit = (12 + ratings.flight.speed.value * .16) *
+    val limit = (7.2 + ratings.flight.speed.value * .096) *
       (if bracing then .6 else if sprinting then 1.25 else 1.0) *
       (if carrying then .72 + ratings.ballControl.carryFlight.value * .002 else 1.0)
     val request = input.fold(Vec3.zero)(i => Vec3(i.forward.value, i.strafe.value, i.climb.value))
@@ -42,10 +42,10 @@ private[matches] object FlightRules:
     }
     val requested = movement * (1 / math.max(1.0, movement.length))
     val desired = Vec3(requested.x * limit, requested.y * limit,
-      requested.z * (4 + ratings.flight.climb.value * .08))
+      requested.z * (3.2 + ratings.flight.climb.value * .064))
     val currentVelocity = flight.velocity.value
     val delta = desired - currentVelocity
-    val maxChange = (7 + ratings.flight.acceleration.value * .24) * dt
+    val maxChange = (4.55 + ratings.flight.acceleration.value * .156) * dt
     val velocity = currentVelocity + delta * math.min(1.0, maxChange / math.max(delta.length, 1e-9))
     val position = flight.position.value + velocity * dt
     val bounded = contain(position, 1.5)

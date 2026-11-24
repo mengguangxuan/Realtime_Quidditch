@@ -1,18 +1,20 @@
 extends Node3D
 
 const PITCH := preload("res://assets/pitch.glb")
-const RIDER := preload("res://assets/rider.glb")
+const RiderAssets := preload("res://rider_assets.gd")
 const ShotGuide := preload("res://shot_guide.gd")
 var api := MatchApi.new()
 var current_state: Dictionary = {}
 var read_keyboard := true
 var _roster: Dictionary = {}
+var _rider_visuals: Dictionary = {}
 var _labels: Dictionary = {}
 var _sides: Dictionary = {}
 var _selected_id := ""
 var _teammate_id := ""
 var _locations: Dictionary = {}
 var _headings: Dictionary = {}
+var _velocities: Dictionary = {}
 var _camera := Camera3D.new()
 var _ball: MeshInstance3D
 var shot_guide := ShotGuide.new()
@@ -26,6 +28,7 @@ var _camera_heading := Vector3.RIGHT
 var _network := false
 var _brace := false
 var _home_holds_ball := false
+var _match_claimed := false
 var _throw_power := 80.0
 var _last_tick := -1
 
@@ -46,11 +49,20 @@ func _ready() -> void:
 	_create_hud()
 	api.snapshot_received.connect(_apply_frame)
 	api.connection_changed.connect(func(connected: bool) -> void: _network = connected)
+	api.session_expired.connect(_return_to_login)
+	api.match_unavailable.connect(func() -> void:
+		_match_claimed = true
+		_set_aiming(false))
 	add_child(api)
 
 
+func _return_to_login() -> void:
+	_set_aiming(false)
+	get_tree().change_scene_to_file.call_deferred("res://login.tscn")
+
+
 func _process(delta: float) -> void:
-	if read_keyboard and not _spectating:
+	if read_keyboard and not _spectating and not _match_claimed:
 		if _home_holds_ball:
 			shot_guide.rotate_aim(_axis(KEY_RIGHT, KEY_LEFT), _axis(KEY_UP, KEY_DOWN), delta)
 		_read_flight_input()
@@ -60,6 +72,7 @@ func _process(delta: float) -> void:
 		var target: Vector3 = _locations[id]
 		avatar.position = target if avatar.position.distance_to(target) > 6.0 else avatar.position.lerp(target, weight)
 		avatar.rotation.y = lerp_angle(avatar.rotation.y, _headings[id], weight)
+		_update_rider_visual(_rider_visuals[id], avatar.rotation.y, _velocities[id], delta)
 	_update_ball(weight)
 	_update_camera(delta)
 	_update_hud()
@@ -123,8 +136,17 @@ func _horizontal(direction: Vector3) -> Vector3:
 	return Vector3(direction.x, 0, direction.z).normalized()
 
 
+func _update_rider_visual(visual: Node3D, heading: float, velocity: Vector3, delta: float) -> void:
+	var horizontal_speed := Vector2(velocity.x, velocity.z).length()
+	var offset := 0.0
+	if horizontal_speed > 0.6:
+		var travel_yaw := atan2(velocity.x, velocity.z)
+		offset = angle_difference(heading, travel_yaw) * smoothstep(0.6, 3.0, horizontal_speed)
+	visual.rotation.y = lerp_angle(visual.rotation.y, offset, 1.0 - exp(-9.0 * delta))
+
+
 func _unhandled_input(event: InputEvent) -> void:
-	if not read_keyboard or _spectating:
+	if not read_keyboard or _spectating or _match_claimed:
 		return
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
@@ -149,7 +171,7 @@ func _notification(what: int) -> void:
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
-	if not read_keyboard or not event is InputEventKey or not event.pressed or event.echo:
+	if not read_keyboard or _match_claimed or not event is InputEventKey or not event.pressed or event.echo:
 		return
 	if event.physical_keycode == KEY_ENTER and current_state.get("phase", {}).has("Ready"):
 		api.start_match()
@@ -234,6 +256,7 @@ func _apply_frame(frame: Dictionary) -> void:
 	for id: String in current_state["athletes"]:
 		var flight: Dictionary = current_state["athletes"][id]["flight"]
 		_locations[id] = _position(flight["position"]["value"])
+		_velocities[id] = _position(flight["velocity"]["value"])
 		var facing := _position(flight["facing"])
 		_headings[id] = atan2(facing.x, facing.z)
 	_brace = current_state["athletes"][_selected_id]["movement"] == "Bracing"
@@ -261,14 +284,14 @@ func _update_ball(weight: float) -> void:
 	shot_guide.hide()
 	if _home_holds_ball and _network:
 		var rider: Node3D = _roster[_selected_id]
-		var velocity := _position(current_state["athletes"][_selected_id]["flight"]["velocity"]["value"])
+		var velocity: Vector3 = _velocities[_selected_id]
 		shot_guide.show_tangent(rider.position, velocity, _throw_power)
 	if quaffle.has("Free"):
 		var goal := _position(quaffle["Free"]["motion"]["position"]["value"])
 		_ball.position = goal if _ball.position.distance_to(goal) > 5.0 else _ball.position.lerp(goal, weight)
 	elif not held.is_empty():
-		var carrier: Node3D = _roster[str(int(held["athlete"]))]
-		_ball.position = carrier.position + carrier.transform.basis.z * 0.75 + Vector3(0, 0.36, 0)
+		var carrier: Node3D = _rider_visuals[str(int(held["athlete"]))]
+		_ball.position = carrier.global_position + carrier.global_basis.z.normalized() * 0.75 + Vector3(0, 0.36, 0)
 
 
 func _update_hud() -> void:
@@ -283,6 +306,9 @@ func _update_hud() -> void:
 	_score.text = caption % [
 		score["home"], score["away"], floori(seconds / 60.0), seconds % 60
 	]
+	if _match_claimed:
+		_status.text = "此场比赛由另一个账号开启"
+		return
 	var phase: Dictionary = current_state["phase"]
 	if phase.has("Ready"):
 		_status.text = "按 Enter 开赛"
@@ -311,8 +337,11 @@ func _update_hud() -> void:
 
 
 func _create_rider(id: String, initial: Vector3, rider_name: String, show_name: bool) -> void:
-	var avatar: Node3D = RIDER.instantiate()
+	var avatar := Node3D.new()
 	add_child(avatar)
+	var visual: Node3D = RiderAssets.create(int(id))
+	avatar.add_child(visual)
+	_rider_visuals[id] = visual
 	avatar.position = initial
 	var home: bool = _sides[id] == "Home"
 	avatar.rotation.y = PI / 2.0 if home else -PI / 2.0

@@ -11,18 +11,24 @@
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | GET | `/health` | 检查服务 |
-| POST | `/matches/demo/start` | 开始一场比赛 |
+| POST | `/auth/register` | 注册账号，提交 `username` 和 `password` |
+| POST | `/auth/login` | 校验密码并签发会话令牌 |
+| POST | `/auth/logout` | 撤销请求携带的会话令牌 |
+| GET | `/matches/lobby` | 获取球员卡、默认对战设置和开赛状态 |
+| POST | `/matches/demo/start` | 开赛，可提交 `teamSize`、`watch` 和首发球员 ID `athlete` |
 | GET | `/matches/demo` | 获取最近模拟帧 |
 | POST | `/matches/demo/controls` | 将操作排入下一模拟步 |
 | GET | `/matches/demo/timeline/{tick}` | 按模拟帧编号查询历史快照和事件 |
 | GET | `/matches/history` | 按启动时间倒序列出已记录的比赛 ID |
 | GET | `/matches/history/{matchId}/timeline/{tick}` | 按比赛 ID 和帧号读取数据库中的快照和事件 |
 
+比赛接口需要 `Authorization: Bearer <token>`。当前每次启动提供一场本地比赛，开赛账号拥有该场的操作权限，控制侧由后端绑定为主队。账号密码以加盐 PBKDF2 哈希存入 SQLite。会话保存在后端内存中，8 小时后或后端重启后失效。
+
 ## 原型球员
 
-球员卡存放在 SQLite 的 `athlete_cards` 表中，每个球员 ID 对应一条 `Athlete` 记录。后端启动创建比赛时读取球员卡，并按 ID 从每队选人。初始化使用 `src/main/resources/matches/athlete-cards.json` 补齐缺失的默认卡，已存在的卡保留库内值。每场比赛的时间轴保留该场加载的属性。
+球员卡存放在 SQLite 的 `athlete_cards` 表中，每个球员 ID 对应一条 `Athlete` 记录。选卡页读取库内评分，提交开赛时后端重新读取球员卡，按首发 ID 和每队人数生成阵容。初始化使用 `src/main/resources/matches/athlete-cards.json` 补齐缺失的默认卡，已存在的卡保留库内值。开赛帧和后续时间轴保留该场使用的属性。
 
-例如，在 SQLite 中把哈利的速度调整为 92。下次启动的新比赛会读到新值。
+例如，在 SQLite 中把哈利的速度调整为 92。下一场比赛会读到新值。
 
 ```sql
 UPDATE athlete_cards
@@ -37,7 +43,7 @@ WHERE athlete_id = 1;
 | 3 | Ron Weasley | 格兰芬多 | 接球、短传、守门 | `Ron_Weasley_Gryffindor_1516467167167545344.glb` |
 | 4 | Vincent Crabbe | 斯莱特林 | 身体对抗、平衡、护球 | `Vincent_Crabbe_Slytherin_1516467169587666944.glb` |
 
-这四个 GLB 是静态网格。Godot 比赛目前继续使用已有的骑扫帚资产。
+Godot 按球员 ID 加载从绑骨源文件导出的骑乘姿势和共用扫帚。四人的游戏网格位于 `client/assets/riders`。
 
 本地调试使用 `home` 和 `away` 两个控制者。开赛后可向 `/matches/demo/controls` 发送下面的 JSON，设置主队球员的移动输入。
 

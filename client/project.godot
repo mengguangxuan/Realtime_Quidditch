@@ -2,7 +2,7 @@ config_version=5
 
 [application]
 config/name="Realtime Quidditch"
-run/main_scene="res://match.tscn"
+run/main_scene="res://login.tscn"
 
 [display]
 window/size/viewport_width=1152

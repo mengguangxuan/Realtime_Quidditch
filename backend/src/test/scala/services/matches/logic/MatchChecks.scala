@@ -168,6 +168,13 @@ object MatchChecks:
     val turned = FlightRules.moveAthlete(rider, stationary,
       Some(idle.copy(turn = Some(AxisInput(1)))), carrying = false)
     assert(turned.flight.facing.value.x > 0 && turned.flight.velocity.value == Vec3.zero)
+    val sprint = idle.copy(forward = AxisInput(1), sprint = true)
+    val midfield = stationary.copy(flight = stationary.flight.copy(facing = Direction.east))
+    val afterThreeSeconds = (1 to 3 * MatchSimulation.ticksPerSecond).foldLeft(midfield) { (state, _) =>
+      FlightRules.moveAthlete(rider, state, Some(sprint), carrying = false)
+    }
+    assert(afterThreeSeconds.flight.position.value.x > 40)
+    assert(afterThreeSeconds.flight.position.value.x < Pitch.alpine.halfLength - 5)
 
   private def checkControlSwitch(setup: MatchSetup): Unit =
     val human = setup.players.head
@@ -254,7 +261,7 @@ object MatchChecks:
     assert(DefensePlanner.againstFreeBall(late, defender, fast, canUseCatch = true).isInstanceOf[Decision.HoldGoal])
 
     val slow = QuaffleRules.free(Vec3(23, 0, 12), Vec3(16, 0, 6.95))
-    val staged = scene(Vec3(18, 0, 9), Vec3(40, 5, 10))
+    val staged = scene(Vec3(18, 0, 9), Vec3(40, 3, 13))
     val live = MatchBalls(slow, SpecialBalls(Map.empty, None))
     val initial = staged.copy(phase = MatchPhase.InPlay(live))
     val assignment = staged.controls.find(_.athlete == defender.id).get

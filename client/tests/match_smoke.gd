@@ -8,15 +8,91 @@ func _initialize() -> void:
 
 
 func _run() -> void:
-	game = load("res://match.tscn").instantiate()
+	var request := HTTPRequest.new()
+	request.timeout = 5
+	root.add_child(request)
+	request.request(MatchApi.backend_origin() + "/matches/demo")
+	var anonymous: Array = await request.request_completed
+	if anonymous[1] != 401:
+		_fail("The server allowed an unauthenticated match request")
+		return
+	request.request(MatchApi.backend_origin() + "/matches/demo/start", [], HTTPClient.METHOD_POST)
+	anonymous = await request.request_completed
+	request.queue_free()
+	if anonymous[1] != 401:
+		_fail("The server allowed an unauthenticated match start")
+		return
+	var login = load("res://login.tscn").instantiate()
+	root.add_child(login)
+	current_scene = login
+	login._username.text = "smoke_player"
+	login._password.text = "smoke password 42"
+	login._submit(true)
+	if not await _until(func() -> bool: return login._message.text.contains("账号已创建"), 6.0):
+		_fail("Registration did not create an account")
+		return
+	login._password.text = "incorrect password"
+	login._submit(false)
+	if not await _until(func() -> bool: return login._message.text.contains("账号或密码错误"), 6.0):
+		_fail("The login did not reject an incorrect password")
+		return
+	login._password.text = "smoke password 42"
+	var login_id: int = login.get_instance_id()
+	login._submit(false)
+	if not await _until(func() -> bool: return current_scene.get_instance_id() != login_id, 6.0):
+		_fail("A valid account could not enter the lobby")
+		return
+	var lobby = current_scene
+	if not await _until(func() -> bool: return not lobby._chosen.is_empty(), 6.0):
+		_fail("The lobby did not load athlete cards")
+		return
+	var selected := 1
+	if lobby._modes.selected >= 2:
+		for card: Dictionary in lobby._cards:
+			if int(card["id"]) == 3:
+				lobby._choose(card)
+				selected = 3
+	var lobby_id: int = lobby.get_instance_id()
+	lobby._start()
+	if not await _until(func() -> bool: return current_scene.get_instance_id() != lobby_id, 6.0):
+		_fail("The configured match could not start")
+		return
+	game = current_scene
 	game.read_keyboard = false
-	root.add_child(game)
 	if not await _until(func() -> bool: return not game.current_state.is_empty(), 6.0):
 		_fail("No Scala snapshot reached Godot")
 		return
-	game.api.start_match()
+	var visual := Node3D.new()
+	game._update_rider_visual(visual, PI / 2, Vector3.LEFT * 8, 1.0)
+	var reverse_ok := absf(absf(visual.rotation.y) - PI) < 0.01
+	game._update_rider_visual(visual, PI / 2, Vector3.BACK * 8, 1.0)
+	var strafe_ok := absf(angle_difference(visual.rotation.y, -PI / 2)) < 0.01
+	game._update_rider_visual(visual, PI / 2, Vector3.ZERO, 1.0)
+	var idle_ok := absf(angle_difference(visual.rotation.y, 0)) < 0.01
+	visual.free()
+	if not (reverse_ok and strafe_ok and idle_ok):
+		_fail("Rider visual did not face travel direction and return to its heading when stopped")
+		return
 	if not await _until(func() -> bool: return game.current_state["phase"].has("InPlay"), 4.0):
 		_fail("Godot could not start the match")
+		return
+	if int(game._selected_id) != selected:
+		_fail("The server did not assign the selected athlete card")
+		return
+	for id: String in game._rider_visuals:
+		var model: Node3D = game._rider_visuals[id].get_child(0)
+		if model.scene_file_path != "res://assets/riders/athlete_%s.glb" % id:
+			_fail("A rider did not use its own Blender model")
+			return
+		var meshes := model.find_children("*", "MeshInstance3D", true, false)
+		if model is MeshInstance3D:
+			meshes.append(model)
+		if not meshes.any(func(mesh: MeshInstance3D) -> bool:
+			var material := mesh.get_active_material(0) as BaseMaterial3D
+			return material != null and material.albedo_texture != null):
+			_fail("A rider was imported without its texture")
+			return
+	if not await _check_match_owner():
 		return
 	if game._spectating:
 		await _check_spectator()
@@ -71,6 +147,45 @@ func _run() -> void:
 	quit(0)
 
 
+func _check_match_owner() -> bool:
+	var request := HTTPRequest.new()
+	request.timeout = 5
+	root.add_child(request)
+	var origin := MatchApi.backend_origin()
+	var headers := ["Content-Type: application/json"]
+	var credentials := JSON.stringify({"username": "smoke_other", "password": "other smoke password"})
+	request.request(origin + "/auth/register", headers, HTTPClient.METHOD_POST, credentials)
+	var response: Array = await request.request_completed
+	if response[1] != 201:
+		request.queue_free()
+		_fail("Could not register another account")
+		return false
+	request.request(origin + "/auth/login", headers, HTTPClient.METHOD_POST, credentials)
+	response = await request.request_completed
+	if response[1] != 200:
+		request.queue_free()
+		_fail("Could not authenticate the other account")
+		return false
+	var payload: Dictionary = JSON.parse_string(response[3].get_string_from_utf8())
+	headers.append("Authorization: Bearer " + str(payload["token"]))
+	request.request(origin + "/matches/demo/controls", headers, HTTPClient.METHOD_POST,
+		JSON.stringify({"player": "home", "control": {"Charge": {}}}))
+	response = await request.request_completed
+	if response[1] != 403:
+		request.queue_free()
+		_fail("The other account could control the active match")
+		return false
+	request.request(origin + "/auth/logout", headers, HTTPClient.METHOD_POST)
+	response = await request.request_completed
+	request.request(origin + "/matches/demo", headers)
+	response = await request.request_completed
+	request.queue_free()
+	if response[1] != 401:
+		_fail("Logout did not revoke the token")
+		return false
+	return true
+
+
 func _check_team_play() -> void:
 	if game._teammate_id != "3" or not game._roster.has("4"):
 		_fail("The four-player lineup was not loaded")
@@ -80,8 +195,9 @@ func _check_team_play() -> void:
 	if not await _until(func() -> bool: return game._selected_id == "3", 2.0):
 		_fail("Tab control did not transfer to Ron")
 		return
-	for attempt in 40:
+	for attempt in 80:
 		if int(game._quaffle().get("HeldBy", {}).get("athlete", -1)) == 3:
+			game.api.flight({"forward": 0, "strafe": 0, "climb": 0, "sprint": false})
 			game.shoot()
 			if not await _until(func() -> bool: return game._quaffle().has("Free"), 2.0):
 				_fail("Ron could not shoot after accepting the pass")
@@ -89,8 +205,18 @@ func _check_team_play() -> void:
 			print("Godot ↔ Scala passed: four riders, pass, control switch, teammate catch and shot")
 			quit(0)
 			return
+		var motion: Dictionary = game._quaffle().get("Free", {}).get("motion", {})
+		if not motion.is_empty():
+			var receiver: Dictionary = game.current_state["athletes"]["3"]["flight"]
+			var relative := _vector(motion["position"]["value"]) - _vector(receiver["position"]["value"])
+			var lead := _vector(motion["velocity"]["value"]) * 0.18
+			var adjust := (relative + lead) * 0.35 - _vector(receiver["velocity"]["value"]) * 0.10
+			game.api.flight({
+				"forward": clampf(adjust.x, -1.0, 1.0), "strafe": clampf(adjust.y, -1.0, 1.0),
+				"climb": clampf(adjust.z, -1.0, 1.0), "sprint": false
+			})
 		game.api.control({"Catch": {"target": "Quaffle"}})
-		await create_timer(0.05).timeout
+		await create_timer(0.10).timeout
 	_fail("The passed Quaffle was not caught by Ron")
 
 

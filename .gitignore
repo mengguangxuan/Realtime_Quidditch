@@ -4,3 +4,5 @@ backend/.bsp/
 backend/.metals/
 backend/data/
 client/.godot/
+generated/
+harry-potter-rigged-character/
