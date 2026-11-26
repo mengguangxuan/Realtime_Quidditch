@@ -29,28 +29,7 @@ private[matches] object DefensePlanner:
   private def ownGoal(athlete: Athlete): Double =
     if athlete.side == Side.Home then -pitch.goalPlaneX else pitch.goalPlaneX
 
-  def primaryDefender(state: MatchState, quaffle: QuaffleState, previous: Option[AthleteId]): Option[AthleteId] =
-    quaffle match
-      case QuaffleState.HeldBy(carrier) =>
-        val carrierSide = state.setup.roster.find(_.id == carrier).get.side
-        val point = state.athletes(carrier).flight.position.value
-        val candidates = state.setup.roster.filter(_.side != carrierSide).map { athlete =>
-          val distance = (state.athletes(athlete.id).flight.position.value - point).length
-          athlete.id -> distance
-        }
-        candidates.minByOption { case (id, distance) => (distance, id.value) }.map { (closest, distance) =>
-          candidates.find { case (id, gap) => previous.contains(id) && gap <= distance + 3 }
-            .fold(closest)(_._1)
-        }
-      case QuaffleState.Free(_) => None
-
-  def coverBehind(athlete: Athlete, carrier: Vec3): Vec3 =
-    val goal = ownGoal(athlete)
-    val lane = if carrier.y >= 0 then -6 else 6
-    Vec3(goal - math.signum(goal) * 3, lane, 10)
-
-  def againstCarrier(state: MatchState, athlete: Athlete, carrier: AthleteId,
-      approach: DefensiveApproach = DefensiveApproach.Pressure, hasCover: Boolean = false): Decision =
+  def againstCarrier(state: MatchState, athlete: Athlete, carrier: AthleteId): Decision =
     val defender = state.athletes(athlete.id).flight
     val opponent = state.athletes(carrier).flight
     val point = opponent.position.value
@@ -65,7 +44,8 @@ private[matches] object DefensePlanner:
     val legalContact = direction.dot(opponent.facing.value) < .55 && closing > 2 &&
       impulse < 23 && distance <= math.min(3.6, 1.30 + closing * .20)
     val prediction = contain(point + opponent.velocity.value * .45, 1.5)
-    val pressure = approach == DefensiveApproach.Pressure
+    val pressure = state.setup.tacticsFor(athlete.side).defense == DefensiveApproach.Pressure
+    val hasCover = state.setup.roster.exists(teammate => teammate.side == athlete.side && teammate.id != athlete.id)
     if pressure && legalContact then Decision.Challenge(carrier, Position(prediction))
     else if pressure && hasCover && advanced > 0 then
       val flank = if toCarrier.x * goalward <= 2.5 then 0.0

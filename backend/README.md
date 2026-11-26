@@ -8,6 +8,8 @@
 
 2 对 2 大厅可为格兰芬多选择进攻接应和防守战术，观战同样生效。`POST /matches/demo/start` 可随阵容提交 `"tactics":{"attackSupport":"Nearby","defense":"Cover"}`。进攻支持 `Nearby`（近距离接应）或 `Wide`（拉开接应），防守支持 `Pressure`（优先逼抢）或 `Cover`（优先回撤保护）。默认战术是 `Wide` 和 `Pressure`，斯莱特林使用默认战术。双方开赛时使用的战术随比赛快照保存。
 
+对手持球时，`logic/computer/TeamDefense.scala` 统一为防守方分工。逼抢战术由一名球员压迫持球人，人数和接球点允许时再分配球员封不同的传球线，其余人保护不同区域。只有队友明显更接近持球人时才交接盯防任务。回撤保护也使用这套分配，由盯防者优先守射门线，队友保护各自区域。
+
 每次启动分配独立的比赛 ID，并将第 0 帧和后续模拟帧立即写入本地 SQLite。数据库默认位于 `backend/data/matches.sqlite3`，可通过 `QUIDDITCH_DB_PATH` 指定路径。每帧包含完整的比赛状态和当步事件。服务重启会开新局，旧帧仍可通过历史接口查询。
 
 | 方法 | 路径 | 用途 |

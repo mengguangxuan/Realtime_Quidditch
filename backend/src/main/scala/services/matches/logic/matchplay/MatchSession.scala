@@ -93,12 +93,12 @@ final class MatchSession private (initial: MatchState, shotSeed: Long, recordFra
         val active = state.copy(controls = assignments)
         val computerPlayers = active.setup.players.filter(_.kind == PlayerKind.Computer).map(_.id).toSet
         val passTarget = inputs.passTarget.filter(_._2 > state.clock.elapsed.value).map(_._1)
-        val defender = DefensePlanner.primaryDefender(active, balls.quaffle, inputs.primaryDefender)
+        val defense = TeamDefense.plan(active, balls.quaffle, inputs.primaryDefender)
         val computer = assignments.filter(assignment => computerPlayers.contains(assignment.player))
-          .flatMap(assignment => ComputerPilot.controls(active, balls, assignment, passTarget, defender)
+          .flatMap(assignment => ComputerPilot.controls(active, balls, assignment, passTarget, defense.get(assignment.athlete))
             .map(assignment.athlete -> _))
         val currentInputs = inputs.copy(flight = inputs.flight -- affected, contacts = inputs.contacts -- affected,
-          primaryDefender = defender)
+          primaryDefender = TeamDefense.marker(defense))
         val step = MatchSimulation.advance(active, balls, pending ++ computer, currentInputs, shotSeed, rules)
         val saved = append(step.state, events ++ step.events)
         pending = Vector.empty

@@ -10,7 +10,7 @@ private[matches] object ComputerPilot:
       .map(direction => Control.Shoot(ShotAim(direction, ShotPower(1), None)))
 
   def controls(state: MatchState, balls: MatchBalls, assignment: ControlAssignment,
-      passTarget: Option[AthleteId] = None, primaryDefender: Option[AthleteId] = None): List[Control] =
+      passTarget: Option[AthleteId] = None, defensiveTask: Option[TeamDefense.Task] = None): List[Control] =
     val athlete = state.setup.roster.find(_.id == assignment.athlete).get
     val flight = state.athletes(athlete.id).flight
     val position = flight.position.value
@@ -67,7 +67,9 @@ private[matches] object ComputerPilot:
       case QuaffleState.HeldBy(id) =>
         val carrier = state.athletes(id).flight.position.value
         if team.exists(_.id == id) then support(carrier)
-        else if primaryDefender.getOrElse(nearest(carrier)) == athlete.id then
-          defend(DefensePlanner.againstCarrier(state, athlete, id, tactics.defense, hasCover = teammates.nonEmpty))
-        else List(move(DefensePlanner.coverBehind(athlete, carrier)))
+        else defensiveTask.toList.flatMap {
+          case TeamDefense.Task.MarkCarrier => defend(DefensePlanner.againstCarrier(state, athlete, id))
+          case TeamDefense.Task.ClosePassingLane(_, target) => List(move(target.value))
+          case TeamDefense.Task.CoverZone(target) => List(move(target.value))
+        }
     decisions.filter(control => assignment.allowedControls.contains(control.kind))

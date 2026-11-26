@@ -124,6 +124,7 @@ object MatchChecks:
     checkCompetitionRules(demo)
     checkDefensePlanning(demo)
     checkCoordinatedDefense()
+    checkTeamPressureAssignments()
     checkTeamTactics()
     val solo = MatchSession.demo(cards, computerOpponent = true, shotSeed = 42)
     assert(solo.start().isRight)
@@ -413,18 +414,19 @@ object MatchChecks:
       )
       val balls = MatchBalls(QuaffleState.HeldBy(carrier.id), SpecialBalls(Map.empty, None))
       val start = initial.copy(phase = MatchPhase.InPlay(balls), athletes = positions)
-      val lead = DefensePlanner.primaryDefender(start, balls.quaffle, None).get
+      val lead = TeamDefense.marker(TeamDefense.plan(start, balls.quaffle, None)).get
       val partner = defending.find(_.id != lead).get
-      assert(DefensePlanner.primaryDefender(start, balls.quaffle, Some(partner.id)).contains(partner.id))
+      assert(TeamDefense.marker(TeamDefense.plan(start, balls.quaffle, Some(partner.id))).contains(partner.id))
       val leadAthlete = defending.find(_.id == lead).get
-      assert(DefensePlanner.againstCarrier(start, leadAthlete, carrier.id, hasCover = true)
+      assert(DefensePlanner.againstCarrier(start, leadAthlete, carrier.id)
         .isInstanceOf[DefensePlanner.Decision.Press])
 
       val assignments = start.controls.filter(assignment => defending.exists(_.id == assignment.athlete))
       val end = (1 to 30).foldLeft(MatchSimulation.Step(start, Nil, MatchSimulation.Inputs())) { (step, _) =>
-        val defender = DefensePlanner.primaryDefender(step.state, balls.quaffle, step.inputs.primaryDefender)
+        val pressure = TeamDefense.plan(step.state, balls.quaffle, step.inputs.primaryDefender)
+        val defender = TeamDefense.marker(pressure)
         val commands = assignments.flatMap(assignment =>
-          ComputerPilot.controls(step.state, balls, assignment, primaryDefender = defender)
+          ComputerPilot.controls(step.state, balls, assignment, defensiveTask = pressure.get(assignment.athlete))
             .map(assignment.athlete -> _)).toVector
         MatchSimulation.advance(step.state, balls, commands, step.inputs.copy(primaryDefender = defender), 42)
       }
@@ -460,6 +462,70 @@ object MatchChecks:
     assert(longest <= MatchClock.ticksPerSecond, s"Defenders stayed within 2 meters for $longest ticks")
     println(s"CPU vs CPU 2v2 (seed 42): longest defended overlap under 2 m was $longest ticks")
 
+  private def checkTeamPressureAssignments(): Unit =
+    val initial = MatchSession.demo(cards, teamSize = 2).latest.state
+    val roster = Side.values.toList.flatMap { side =>
+      val template = cards.find(_.side == side).get
+      (1 to 7).map(index => template.copy(id = AthleteId(side.ordinal * 7 + index))).toList
+    }
+    val players = roster.map(athlete => Player(PlayerId(s"test-${athlete.id.value}"), athlete.side, PlayerKind.Computer))
+    val assignments = players.zip(roster).map { (player, athlete) =>
+      ControlAssignment(player.id, athlete.id, Set(ControlKind.Fly, ControlKind.Charge))
+    }
+    val setup = initial.setup.copy(roster = roster, players = players, assignments = assignments,
+      roles = roster.map(_.id -> AthleteRole.Chaser).toMap)
+    assert(MatchSession.create(MatchId("7v7-pressure-test"), setup, 100, 42).isRight)
+
+    for side <- Side.values do
+      val defending = roster.filter(_.side == side)
+      val attacking = roster.filter(_.side != side)
+      val carrier = attacking.head
+      val goalward = if side == Side.Home then -1 else 1
+      val attackingPoints = List(Vec3(0, 0, 11), Vec3(23 * goalward, -12, 8), Vec3(21 * goalward, 12, 14),
+        Vec3(5 * goalward, 0, 20), Vec3(-6 * goalward, 3, 5), Vec3(-15 * goalward, -8, 10),
+        Vec3(-18 * goalward, 5, 12))
+      val defendingPoints = defending.indices.map { index =>
+        Vec3(goalward * (5 + index * 4), (index % 3 - 1) * 6, 10)
+      }
+      val athletes = (attacking.zip(attackingPoints) ++ defending.zip(defendingPoints)).map { (athlete, position) =>
+        val entry = MatchSimulation.initialAthlete(athlete.side)
+        athlete.id -> entry.copy(flight = entry.flight.copy(position = Position(position)))
+      }.toMap
+      val ball = QuaffleState.HeldBy(carrier.id)
+      val balls = MatchBalls(ball, SpecialBalls(Map.empty, None))
+      val state = initial.copy(setup = setup, controls = assignments, athletes = athletes, phase = MatchPhase.InPlay(balls))
+      val tasks = TeamDefense.plan(state, ball, None)
+      assert(tasks.keySet == defending.map(_.id).toSet)
+      assert(tasks.values.count(_ == TeamDefense.Task.MarkCarrier) == 1)
+      val lanes = tasks.values.collect { case TeamDefense.Task.ClosePassingLane(receiver, point) => receiver -> point }.toList
+      val zones = tasks.values.collect { case TeamDefense.Task.CoverZone(point) => point }.toList
+      assert(lanes.map(_._1).toSet == attacking.slice(1, 3).map(_.id).toSet)
+      assert(zones.size == 4)
+      assert((lanes.map(_._2) ++ zones).combinations(2).forall(points =>
+        (points.head.value - points.last.value).length >= 4))
+      val commands = assignments.filter(assignment => tasks.contains(assignment.athlete)).flatMap { assignment =>
+        ComputerPilot.controls(state, balls, assignment, defensiveTask = tasks.get(assignment.athlete))
+          .map(assignment.athlete -> _)
+      }
+      assert(commands.collect { case (id, _: Control.Fly) => id }.toSet == tasks.keySet)
+      val next = MatchSimulation.advance(state, balls, commands.toVector, MatchSimulation.Inputs(), 42).state
+      tasks.foreach { (id, task) =>
+        val target = task match
+          case TeamDefense.Task.MarkCarrier => athletes(carrier.id).flight.position
+          case TeamDefense.Task.ClosePassingLane(_, point) => point
+          case TeamDefense.Task.CoverZone(point) => point
+        val flight = next.athletes(id).flight
+        assert(flight.velocity.value.dot(target.value - athletes(id).flight.position.value) > 0)
+      }
+      assert(TeamDefense.plan(state, QuaffleRules.free(Vec3.zero), TeamDefense.marker(tasks)).isEmpty)
+      val afterTurnover = TeamDefense.plan(state, QuaffleState.HeldBy(defending.head.id), TeamDefense.marker(tasks))
+      assert(afterTurnover.keySet == attacking.map(_.id).toSet)
+      val cover = TeamTactics.default.copy(defense = DefensiveApproach.Cover)
+      val coverState = state.copy(setup = setup.copy(tactics = Some(MatchTactics(cover, cover))))
+      val coverTasks = TeamDefense.plan(coverState, ball, None)
+      assert(coverTasks.keySet == tasks.keySet)
+      assert(coverTasks.values.count(_.isInstanceOf[TeamDefense.Task.CoverZone]) == 6)
+
   private def checkTeamTactics(): Unit =
     val setup = MatchSession.demo(cards, teamSize = 2).latest.state.setup
     val before = setup.asJson.mapObject(_.remove("tactics")).as[MatchSetup].toOption.get
@@ -484,7 +550,8 @@ object MatchChecks:
       val configured = setup.copy(tactics = Some(MatchTactics(tactics, TeamTactics.default)))
       val start = initial.copy(setup = configured, phase = MatchPhase.InPlay(balls), athletes = arranged)
       val end = (1 to ticks).foldLeft(MatchSimulation.Step(start, Nil, MatchSimulation.Inputs())) { (step, _) =>
-        val controls = ComputerPilot.controls(step.state, balls, teammate).map(teammate.athlete -> _).toVector
+        val task = TeamDefense.plan(step.state, balls.quaffle, step.inputs.primaryDefender).get(teammate.athlete)
+        val controls = ComputerPilot.controls(step.state, balls, teammate, defensiveTask = task).map(teammate.athlete -> _).toVector
         MatchSimulation.advance(step.state, balls, controls, step.inputs, 42)
       }
       end.state.athletes(teammate.athlete).flight.position.value
