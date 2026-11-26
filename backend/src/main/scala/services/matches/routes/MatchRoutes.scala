@@ -41,12 +41,20 @@ final class MatchRoutes(session: MatchSession, database: Option[Path] = None, lo
         val setup = state.setup
         val watch = setup.players.forall(_.kind == PlayerKind.Computer)
         val available = cards
-        val slots = available.filter(_.side == Side.Home).indices.map(index => MatchSimulation.startingSlot(Side.Home, index))
+        val smallRoster = MatchSession.demoCards(available, 2)
+        val lineups = MatchSession.demoTeamSizes.map { size =>
+          val slots = (0 until size).map(index => MatchSimulation.startingSlot(Side.Home, index, size))
+          size.toString -> Json.obj("cards" -> MatchSession.demoCards(available, size).asJson, "slots" -> slots.asJson)
+        }
         val pitch = Pitch.alpine
-        val positioning = Json.obj("slots" -> slots.asJson, "halfLength" -> pitch.halfLength.asJson,
+        val smallSlots = smallRoster.count(_.side == Side.Home)
+        val positioning = Json.obj(
+          "slots" -> (0 until smallSlots).map(index => MatchSimulation.startingSlot(Side.Home, index)).asJson,
+          "halfLength" -> pitch.halfLength.asJson,
           "halfWidth" -> pitch.halfWidth.asJson, "goalPlaneX" -> pitch.goalPlaneX.asJson,
           "clearance" -> MatchSimulation.startingClearance.asJson, "spacing" -> MatchSimulation.startingSpacing.asJson)
-        200 -> Json.obj("cards" -> available.asJson, "teamSize" -> (setup.roster.size / 2).asJson,
+        200 -> Json.obj("cards" -> smallRoster.asJson, "lineups" -> Json.obj(lineups*),
+          "teamSize" -> (setup.roster.size / 2).asJson,
           "watch" -> watch.asJson, "active" -> (state.phase != MatchPhase.Ready).asJson,
           "homeTactics" -> setup.tacticsFor(Side.Home).asJson, "positioning" -> positioning)
       case ("POST", "/matches/demo/start") => start(exchange)

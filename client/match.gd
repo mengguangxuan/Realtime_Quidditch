@@ -11,7 +11,8 @@ var _rider_visuals: Dictionary = {}
 var _labels: Dictionary = {}
 var _sides: Dictionary = {}
 var _selected_id := ""
-var _teammate_id := ""
+var _home_lineup: Array[String] = []
+var _names: Dictionary = {}
 var _locations: Dictionary = {}
 var _headings: Dictionary = {}
 var _velocities: Dictionary = {}
@@ -214,13 +215,35 @@ func shoot() -> void:
 
 
 func pass_to_teammate() -> void:
-	if _home_holds_ball and not _teammate_id.is_empty():
-		api.control({"Pass": {"receiver": int(_teammate_id)}})
+	if _home_holds_ball:
+		var receiver := _pass_receiver()
+		if not receiver.is_empty():
+			api.control({"Pass": {"receiver": int(receiver)}})
+
+
+func _pass_receiver() -> String:
+	var receiver := ""
+	var best_alignment := -INF
+	var best_distance := INF
+	var origin: Vector3 = _locations[_selected_id]
+	var aim := shot_guide.direction()
+	for id in _home_lineup:
+		if id == _selected_id:
+			continue
+		var offset: Vector3 = _locations[id] - origin
+		var alignment := aim.dot(offset.normalized())
+		var distance := offset.length_squared()
+		if alignment > best_alignment or (is_equal_approx(alignment, best_alignment) and distance < best_distance):
+			receiver = id
+			best_alignment = alignment
+			best_distance = distance
+	return receiver
 
 
 func switch_teammate() -> void:
-	if not _teammate_id.is_empty():
-		api.control({"SwitchAthlete": {"athlete": int(_teammate_id)}})
+	if _home_lineup.size() > 1:
+		var next := (_home_lineup.find(_selected_id) + 1) % _home_lineup.size()
+		api.control({"SwitchAthlete": {"athlete": int(_home_lineup[next])}})
 
 
 func _apply_frame(frame: Dictionary) -> void:
@@ -248,20 +271,21 @@ func _apply_frame(frame: Dictionary) -> void:
 		_set_aiming(false)
 		_home_holds_ball = false
 	var lineup: Array = current_state["setup"]["roster"]
-	_teammate_id = ""
+	_home_lineup.clear()
 	_controls.text = "WASD 移动   Z / X 转身   空格 / C 升降   E 接球   F 投球   R 传球   Tab 切换   V 冲撞" if lineup.size() > 2 else _controls_default
 	for athlete: Dictionary in lineup:
 		var id := str(int(athlete["id"]))
 		var flight: Dictionary = current_state["athletes"][id]["flight"]
 		_sides[id] = athlete["side"]
+		_names[id] = athlete["name"]
+		if athlete["side"] == "Home":
+			_home_lineup.append(id)
 		if not _roster.has(id):
 			_create_rider(id, _position(flight["position"]["value"]), athlete["name"], lineup.size() > 2)
 		var label: Label3D = _labels[id]
 		label.modulate = Color.GOLD if id == _selected_id and not _spectating else Color.WHITE
 		if id == _selected_id:
 			_throw_power = float(athlete["ratings"]["throwing"]["power"])
-		elif athlete["side"] == "Home":
-			_teammate_id = id
 	for id: String in current_state["athletes"]:
 		var flight: Dictionary = current_state["athletes"][id]["flight"]
 		_locations[id] = _position(flight["position"]["value"])
@@ -324,13 +348,17 @@ func _update_hud() -> void:
 	var clock: Dictionary = current_state["clock"]
 	var seconds := int(ceil((clock["durationTicks"] - clock["elapsed"]["value"]) / 20.0))
 	var score: Dictionary = current_state["score"]
-	var caption := "绿队电脑  %d   /   %d  蓝队电脑      %02d:%02d" if _spectating else "你  %d   /   %d  电脑      %02d:%02d"
-	_score.text = caption % [
-		score["home"], score["away"], floori(seconds / 60.0), seconds % 60
+	var named_teams := _home_lineup.size() == 7
+	var home := "格兰芬多" if named_teams else "绿队"
+	var away := "巴塞罗那" if named_teams else "蓝队"
+	var home_caption := home + "电脑" if _spectating else (home if named_teams else "你")
+	var away_caption := away + "电脑" if _spectating else (away if named_teams else "电脑")
+	_score.text = "%s  %d   /   %d  %s      %02d:%02d" % [
+		home_caption, score["home"], score["away"], away_caption, floori(seconds / 60.0), seconds % 60
 	]
 	var attack = current_state.get("attackClock")
 	if attack != null:
-		var team := "绿队" if attack["side"] == "Home" else "蓝队"
+		var team := home if attack["side"] == "Home" else away
 		_score.text += "  ·  %s进攻 %d 秒" % [team, ceili(attack["remainingTicks"] / 20.0)]
 	if _match_claimed:
 		_status.text = "此场比赛由另一个账号开启"
@@ -362,21 +390,23 @@ func _update_hud() -> void:
 			_status.text = "罚球飞行中"
 		else:
 			var remaining := ceili(penalty["remainingTicks"] / 20.0)
-			var team := "绿队" if penalty["side"] == "Home" else "蓝队"
+			var team := home if penalty["side"] == "Home" else away
 			_status.text = "你来罚球  ·  右键瞄准，F 或左键出手  ·  %d 秒" % remaining if _home_holds_ball else "%s罚球  ·  %d 秒" % [team, remaining]
 	elif _spectating:
 		var holder := int(_quaffle().get("HeldBy", {}).get("athlete", -1))
 		if holder < 0:
 			_status.text = "观战  ·  自由球"
 		else:
-			_status.text = "观战  ·  绿队持球" if _sides[str(holder)] == "Home" else "观战  ·  蓝队持球"
+			_status.text = "观战  ·  %s持球" % (home if _sides[str(holder)] == "Home" else away)
 	else:
 		var quaffle := _quaffle()
 		if quaffle.has("HeldBy"):
 			var holder_id := str(int(quaffle["HeldBy"]["athlete"]))
 			if holder_id == _selected_id:
 				_status.text = "你持球  ·  按住右键瞄准  ·  F 或左键投球"
-			elif holder_id == _teammate_id:
+				if named_teams:
+					_status.text += "  ·  R 传给 " + str(_names.get(_pass_receiver(), ""))
+			elif _home_lineup.has(holder_id):
 				_status.text = "队友持球  ·  Tab 切换"
 			else:
 				_status.text = "对手持球  ·  V 冲撞"

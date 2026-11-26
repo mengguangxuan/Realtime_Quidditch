@@ -34,16 +34,25 @@ private[matches] object MatchSimulation:
     AthleteState(FlightState(Position(Vec3(x, 0, startingHeight)), Velocity(Vec3.zero), facing),
       Stamina(100), Stability(100), MovementMode.Normal)
 
-  def startingSlot(side: Side, index: Int): Position =
+  private val sevenAsideFormation = Vector(
+    (-11.0, 0.0), (-19.0, 13.0), (-19.0, -13.0), (-29.0, 0.0),
+    (-33.0, 15.0), (-33.0, -15.0), (-41.0, 0.0)
+  )
+
+  def startingSlot(side: Side, index: Int, teamSize: Int = 2): Position =
     val start = initialAthlete(side).flight.position.value
     val sign = if side == Side.Home then 1 else -1
-    Position(start + Vec3(0, sign * index * 8, 0))
+    if teamSize == sevenAsideFormation.size then
+      val (x, y) = sevenAsideFormation(index)
+      Position(Vec3(sign * x, sign * y, startingHeight))
+    else Position(start + Vec3(0, sign * index * 8, 0))
 
   def formation(roster: List[Athlete], positions: Map[AthleteId, Position] = Map.empty): Map[AthleteId, AthleteState] =
     Side.values.toList.flatMap { side =>
-      roster.filter(_.side == side).zipWithIndex.map { (athlete, slot) =>
+      val team = roster.filter(_.side == side)
+      team.zipWithIndex.map { (athlete, slot) =>
         val entry = initialAthlete(side)
-        val position = positions.getOrElse(athlete.id, startingSlot(side, slot))
+        val position = positions.getOrElse(athlete.id, startingSlot(side, slot, team.size))
         athlete.id -> entry.copy(flight = entry.flight.copy(position = position))
       }
     }.toMap
@@ -52,7 +61,7 @@ private[matches] object MatchSimulation:
     val home = roster.filter(_.side == Side.Home)
     val pitch = Pitch.alpine
     val points = home.zipWithIndex.map { (athlete, index) =>
-      positions.getOrElse(athlete.id, startingSlot(Side.Home, index)).value
+      positions.getOrElse(athlete.id, startingSlot(Side.Home, index, home.size)).value
     }
     if !positions.keySet.subsetOf(home.map(_.id).toSet) then Left("Invalid starting athlete")
     else if !points.forall(point =>

@@ -11,8 +11,10 @@ var _modes := OptionButton.new()
 var _tactics_panel := HBoxContainer.new()
 var _attack_support := OptionButton.new()
 var _defense := OptionButton.new()
-var _cards_grid := HBoxContainer.new()
-var _opponents_grid := HBoxContainer.new()
+var _home_cards := OptionButton.new()
+var _away_cards := OptionButton.new()
+var _home_caption: Label
+var _away_caption := Label.new()
 var _detail := Label.new()
 var _status := Label.new()
 var _play := Button.new()
@@ -22,6 +24,8 @@ var _formation_player := OptionButton.new()
 var _formation_pitch := Control.new()
 var _formation_status := Label.new()
 var _positioning: Dictionary = {}
+var _lineups: Dictionary = {}
+var _slots: Array = []
 var _formation_edits: Dictionary = {}
 var _opening_players: Array[Dictionary] = []
 var _cards: Array = []
@@ -49,20 +53,24 @@ func _ready() -> void:
 	layout.add_child(form)
 	_label(form, "比赛准备", 35, GOLD)
 	_label(form, "对战模式", 18, INK)
-	for option: String in ["1 对 1  ·  人机对战", "2 对 2  ·  人机对战", "1 对 1  ·  电脑观战", "2 对 2  ·  电脑观战"]:
-		_modes.add_item(option)
 	_modes.custom_minimum_size.y = 46
+	_modes.disabled = true
 	form.add_child(_modes)
 	_tactics_panel.add_theme_constant_override("separation", 12)
 	form.add_child(_tactics_panel)
 	_add_tactics_option(_attack_support, "格兰芬多进攻接应", ["拉开接应", "近距离接应"], ["Wide", "Nearby"])
 	_add_tactics_option(_defense, "格兰芬多防守", ["上前逼抢", "回撤保护"], ["Pressure", "Cover"])
 	_modes.item_selected.connect(_mode_changed)
-	_update_tactics_visibility(_modes.selected)
-	_label(form, "选择格兰芬多首发", 18, INK)
-	form.add_child(_cards_grid)
-	_label(form, "查看斯莱特林球员", 16, INK)
-	form.add_child(_opponents_grid)
+	_tactics_panel.hide()
+	_home_caption = _label(form, "选择格兰芬多首发球员", 18, INK)
+	_home_cards.custom_minimum_size.y = 42
+	_home_cards.item_selected.connect(func(index: int) -> void: _choose(_home_cards.get_item_metadata(index)))
+	form.add_child(_home_cards)
+	_away_caption.add_theme_color_override("font_color", INK)
+	form.add_child(_away_caption)
+	_away_cards.custom_minimum_size.y = 42
+	_away_cards.item_selected.connect(func(index: int) -> void: _show_card(_away_cards.get_item_metadata(index)))
+	form.add_child(_away_cards)
 	_detail.custom_minimum_size.y = 112
 	_detail.add_theme_constant_override("line_spacing", 6)
 	form.add_child(_detail)
@@ -97,13 +105,20 @@ func _add_tactics_option(option: OptionButton, caption: String, labels: Array[St
 	column.add_child(option)
 
 
-func _update_tactics_visibility(mode: int) -> void:
-	_tactics_panel.visible = mode % 2 == 1
+func _mode() -> Dictionary:
+	return _modes.get_selected_metadata()
 
 
-func _mode_changed(mode: int) -> void:
-	_update_tactics_visibility(mode)
-	_refresh_opening_players()
+func _mode_changed(_index: int) -> void:
+	var mode := _mode()
+	var team_size := int(mode["teamSize"])
+	var lineup: Dictionary = _lineups[str(team_size)]
+	_cards = lineup["cards"]
+	_slots = lineup["slots"]
+	_tactics_panel.visible = team_size > 1
+	_home_caption.text = "选择格兰芬多首位球员" if mode["watch"] else "选择格兰芬多首发操控球员"
+	_away_caption.text = "查看巴塞罗那球员" if team_size == 7 else "查看斯莱特林球员"
+	_show_cards()
 
 
 func _create_formation_editor(parent: Control) -> void:
@@ -135,7 +150,7 @@ func _refresh_opening_players() -> void:
 		_play.disabled = _starting or _chosen.is_empty()
 		return
 	_opening_players.append(_chosen)
-	var team_size := _modes.selected % 2 + 1
+	var team_size := int(_mode()["teamSize"])
 	for card: Dictionary in _cards:
 		if _opening_players.size() >= team_size:
 			break
@@ -143,6 +158,11 @@ func _refresh_opening_players() -> void:
 			_opening_players.append(card)
 	for card: Dictionary in _opening_players:
 		_formation_player.add_item(card["name"])
+	if _opening_players.size() < team_size:
+		_formation_status.text = "格兰芬多球员卡不足。"
+		_play.disabled = true
+		_formation_pitch.queue_redraw()
+		return
 	_formation_player.select(0)
 	var valid := _valid_formation()
 	_formation_status.text = "选球员后，点击左侧可用区域摆位。" if valid else "球员站位太近，请调整或恢复默认。"
@@ -151,7 +171,7 @@ func _refresh_opening_players() -> void:
 
 
 func _starting_point(index: int) -> Vector2:
-	var slot: Dictionary = _positioning["slots"][index]["value"]
+	var slot: Dictionary = _slots[index]["value"]
 	return _formation_edits.get(int(_opening_players[index]["id"]), Vector2(slot["x"], slot["y"]))
 
 
@@ -235,12 +255,13 @@ func _select_tactic(option: OptionButton, value: String) -> void:
 			return
 
 
-func _label(parent: Control, caption: String, size: int, color: Color) -> void:
+func _label(parent: Control, caption: String, size: int, color: Color) -> Label:
 	var label := Label.new()
 	label.text = caption
 	label.add_theme_font_size_override("font_size", size)
 	label.add_theme_color_override("font_color", color)
 	parent.add_child(label)
+	return label
 
 
 func _create_preview(parent: Control) -> void:
@@ -277,24 +298,26 @@ func _headers() -> PackedStringArray:
 
 
 func _show_cards() -> void:
-	var group := ButtonGroup.new()
+	var previous := int(_chosen.get("id", 0))
+	_chosen = {}
+	_home_cards.clear()
+	_away_cards.clear()
 	for card: Dictionary in _cards:
-		var home: bool = card["side"] == "Home"
-		var button := Button.new()
-		button.text = card["name"]
-		button.custom_minimum_size.y = 46
-		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		if home:
-			button.toggle_mode = true
-			button.button_group = group
-			button.pressed.connect(_choose.bind(card))
-			_cards_grid.add_child(button)
-			if _chosen.is_empty():
-				button.set_pressed_no_signal(true)
-				_choose(card)
-		else:
-			button.pressed.connect(_show_card.bind(card))
-			_opponents_grid.add_child(button)
+		var option := _home_cards if card["side"] == "Home" else _away_cards
+		option.add_item(card["name"])
+		option.set_item_metadata(option.item_count - 1, card)
+		if option == _home_cards and int(card["id"]) == previous:
+			_home_cards.select(option.item_count - 1)
+	_away_cards.select(-1)
+	if _home_cards.item_count > 0:
+		if _home_cards.selected < 0:
+			_home_cards.select(0)
+		_choose(_home_cards.get_selected_metadata())
+	else:
+		_refresh_opening_players()
+		_detail.text = ""
+		for child in _preview.get_children():
+			child.queue_free()
 
 
 func _choose(card: Dictionary) -> void:
@@ -323,11 +346,9 @@ func _start() -> void:
 		return
 	if _starting or _chosen.is_empty() or _play.disabled:
 		return
-	_starting = true
-	_play.disabled = true
+	_set_starting(true)
 	_status.text = "正在开赛…"
-	var payload := {"athlete": int(_chosen["id"]), "teamSize": _modes.selected % 2 + 1,
-		"watch": _modes.selected >= 2}
+	var payload := {"athlete": int(_chosen["id"]), "teamSize": _mode()["teamSize"], "watch": _mode()["watch"]}
 	if _tactics_panel.visible:
 		payload["tactics"] = {
 			"attackSupport": _attack_support.get_item_metadata(_attack_support.selected),
@@ -338,15 +359,21 @@ func _start() -> void:
 		var id := int(_opening_players[index]["id"])
 		if _formation_edits.has(id):
 			var point: Vector2 = _formation_edits[id]
-			var slot: Dictionary = _positioning["slots"][index]["value"]
+			var slot: Dictionary = _slots[index]["value"]
 			positions[str(id)] = {"value": {"x": point.x, "y": point.y, "z": slot["z"]}}
 	if not positions.is_empty():
 		payload["startingPositions"] = positions
 	if _request.request(MatchApi.backend_origin() + "/matches/demo/start", _headers(),
 			HTTPClient.METHOD_POST, JSON.stringify(payload)) != OK:
-		_starting = false
-		_play.disabled = false
+		_set_starting(false)
 		_status.text = "无法连接比赛服务器。"
+
+
+func _set_starting(starting: bool) -> void:
+	_starting = starting
+	_play.disabled = starting
+	_modes.disabled = starting
+	_home_cards.disabled = starting
 
 
 func _completed(result: int, code: int, _response_headers: PackedStringArray, body: PackedByteArray) -> void:
@@ -357,22 +384,31 @@ func _completed(result: int, code: int, _response_headers: PackedStringArray, bo
 		if result == HTTPRequest.RESULT_SUCCESS and code == 200:
 			_enter_match()
 			return
-		_starting = false
-		_play.disabled = false
+		_set_starting(false)
 		_status.text = "比赛已开启，请重启一场。" if code == 409 else "无法使用当前阵容开赛。"
 		return
 	var data: Variant = JSON.parse_string(body.get_string_from_utf8())
 	if result != HTTPRequest.RESULT_SUCCESS or code != 200 or not data is Dictionary:
 		_status.text = "无法读取球员卡，请检查比赛服务器。"
 		return
-	_cards = data["cards"]
+	_lineups = data["lineups"]
 	_positioning = data.get("positioning", {})
-	_modes.select(int(data["teamSize"]) - 1 + (2 if data["watch"] else 0))
-	_update_tactics_visibility(_modes.selected)
+	var sizes := _lineups.keys()
+	sizes.sort()
+	for watch: bool in [false, true]:
+		for size: String in sizes:
+			var team_size := int(size)
+			var caption := "电脑观战" if watch else "人机对战"
+			_modes.add_item("%d 对 %d  ·  %s" % [team_size, team_size, caption])
+			var index := _modes.item_count - 1
+			_modes.set_item_metadata(index, {"teamSize": team_size, "watch": watch})
+			if team_size == int(data["teamSize"]) and watch == data["watch"]:
+				_modes.select(index)
+	_modes.disabled = false
 	var tactics: Dictionary = data.get("homeTactics", {})
 	_select_tactic(_attack_support, tactics.get("attackSupport", "Wide"))
 	_select_tactic(_defense, tactics.get("defense", "Pressure"))
-	_show_cards()
+	_mode_changed(_modes.selected)
 	_active_match = data["active"]
 	if _active_match:
 		_play.text = "返回赛场"
@@ -380,7 +416,7 @@ func _completed(result: int, code: int, _response_headers: PackedStringArray, bo
 		_modes.disabled = true
 		_attack_support.disabled = true
 		_defense.disabled = true
-		_cards_grid.hide()
+		_home_cards.disabled = true
 		_formation_panel.hide()
 		_status.text = "本场阵容已确定。"
 	else:

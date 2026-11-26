@@ -24,7 +24,7 @@ object Main:
     val computerOpponent = mode != "human"
     val shotSeed = args.lift(2).flatMap(_.toLongOption).getOrElse(ThreadLocalRandom.current().nextLong())
     val teamSize = args.lift(3).fold(1)(_.toInt)
-    require(teamSize >= 1 && teamSize <= 2, "Demo team size must be 1 or 2")
+    require(MatchSession.demoTeamSizes.contains(teamSize), "Demo team size must be 1, 2 or 7")
     val path = Database.path
     val stopped = CountDownLatch(1)
     val closed = CountDownLatch(1)

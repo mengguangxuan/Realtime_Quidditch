@@ -1,5 +1,7 @@
 extends SceneTree
 
+const RiderAssets := preload("res://rider_assets.gd")
+
 var game
 
 
@@ -46,17 +48,29 @@ func _run() -> void:
 	if not await _until(func() -> bool: return not lobby._chosen.is_empty(), 6.0):
 		_fail("The lobby did not load athlete cards")
 		return
-	var selected := 1
-	if lobby._modes.selected >= 2:
-		for card: Dictionary in lobby._cards:
-			if int(card["id"]) == 3:
-				lobby._choose(card)
-				selected = 3
-	var team_play: bool = lobby._modes.selected % 2 == 1
+	var team_size := int(lobby._mode()["teamSize"])
+	var watch := bool(lobby._mode()["watch"])
+	if team_size == 7:
+		var seven_aside_mode: int = lobby._modes.selected
+		lobby._modes.select(0)
+		lobby._modes.item_selected.emit(0)
+		if lobby._opening_players.size() != 1 or lobby._home_cards.item_count != 2:
+			_fail("Switching to a smaller mode did not restore its roster")
+			return
+		lobby._modes.select(seven_aside_mode)
+		lobby._modes.item_selected.emit(seven_aside_mode)
+		if lobby._opening_players.size() != 7 or lobby._away_cards.item_count != 7:
+			_fail("Switching back to 7v7 did not load both teams")
+			return
+	if (watch or team_size == 7) and lobby._home_cards.item_count > 1:
+		lobby._home_cards.select(1)
+		lobby._home_cards.item_selected.emit(1)
+	var selected := int(lobby._chosen["id"])
+	var team_play := team_size > 1
 	var positioned := 0
-	var opening_point := Vector2(-20, -10)
+	var opening_point := Vector2(-20, -5 if team_size == 7 else -10)
 	if lobby._tactics_panel.visible != team_play:
-		_fail("Tactics should be shown for 2v2")
+		_fail("Tactics should be shown for team play")
 		return
 	if lobby._play.get_global_rect().end.y > root.get_visible_rect().end.y:
 		_fail("The lobby start button does not fit in the viewport")
@@ -64,10 +78,10 @@ func _run() -> void:
 	if team_play:
 		lobby._attack_support.select(1)
 		lobby._defense.select(1)
-		if lobby._modes.selected >= 2:
+		if watch or team_size == 7:
 			await process_frame
-			lobby._formation_player.select(1)
-			positioned = int(lobby._opening_players[1]["id"])
+			lobby._formation_player.select(team_size - 1)
+			positioned = int(lobby._opening_players[team_size - 1]["id"])
 			var click := InputEventMouseButton.new()
 			click.button_index = MOUSE_BUTTON_LEFT
 			click.pressed = true
@@ -108,6 +122,9 @@ func _run() -> void:
 	if int(game._selected_id) != selected:
 		_fail("The server did not assign the selected athlete card")
 		return
+	if game._roster.size() != team_size * 2 or game._home_lineup.size() != team_size or game._spectating != watch:
+		_fail("The game scene did not load the selected lineup and mode")
+		return
 	var tactics: Dictionary = game.current_state["setup"]["tactics"]
 	var home_tactics: Dictionary = {"attackSupport": "Nearby", "defense": "Cover"} if team_play else {
 		"attackSupport": "Wide", "defense": "Pressure"}
@@ -118,7 +135,7 @@ func _run() -> void:
 		return
 	for id: String in game._rider_visuals:
 		var model: Node3D = game._rider_visuals[id].get_child(0)
-		if model.scene_file_path != "res://assets/riders/athlete_%s.glb" % id:
+		if model.scene_file_path != RiderAssets.model_path(int(id)):
 			_fail("A rider did not use its own Blender model")
 			return
 		var meshes := model.find_children("*", "MeshInstance3D", true, false)
@@ -133,6 +150,9 @@ func _run() -> void:
 		return
 	if game._spectating:
 		await _check_spectator()
+		return
+	if team_size == 7:
+		await _check_seven_aside_controls()
 		return
 	if not await _fly_to(Vector3(0, 0, 1.5)):
 		_fail("Could not move the rider to the grounded Quaffle")
@@ -250,7 +270,7 @@ func _check_match_owner() -> bool:
 
 
 func _check_team_play() -> void:
-	if game._teammate_id != "3" or not game._roster.has("4"):
+	if game._home_lineup != ["1", "3"] or not game._roster.has("4"):
 		_fail("The four-player lineup was not loaded")
 		return
 	game.pass_to_teammate()
@@ -283,6 +303,28 @@ func _check_team_play() -> void:
 	_fail("The passed Quaffle was not caught by Ron")
 
 
+func _check_seven_aside_controls() -> void:
+	var lineup: Array[String] = game._home_lineup.duplicate()
+	var players: Array = game.current_state["setup"]["players"]
+	if players.filter(func(player: Dictionary) -> bool: return player["kind"] == "Human").size() != 1:
+		_fail("The 7v7 human-vs-CPU match should have exactly one human player")
+		return
+	for index in range(1, lineup.size() + 1):
+		var next := lineup[index % lineup.size()]
+		game.switch_teammate()
+		if not await _until(func() -> bool: return game._selected_id == next, 2.0):
+			_fail("Could not cycle through the seven starting riders")
+			return
+	var origin: Vector3 = game._locations[game._selected_id]
+	var receiver: Vector3 = game._locations[lineup[3]]
+	game.shot_guide.set_direction((receiver - origin).normalized())
+	if game._pass_receiver() != lineup[3]:
+		_fail("The aimed pass did not select the teammate in its direction")
+		return
+	print("Godot ↔ Scala passed: 14 riders, custom formation, control cycling and directional pass selection")
+	quit(0)
+
+
 func _check_spectator() -> void:
 	if not await _until(func() -> bool: return game._quaffle().has("HeldBy"), 8.0):
 		_fail("Neither computer caught the Quaffle")
@@ -293,9 +335,10 @@ func _check_spectator() -> void:
 		if not camera.get_frustum().all(func(plane: Plane) -> bool:
 			return not plane.is_point_over(rider.position)
 		):
-			_fail("Spectator camera did not frame both riders")
+			_fail("Spectator camera did not frame every rider")
 			return
-	if game._controls.visible or game._home_holds_ball or not game._score.text.contains("绿队电脑"):
+	var team := "格兰芬多电脑" if game._home_lineup.size() == 7 else "绿队电脑"
+	if game._controls.visible or game._home_holds_ball or not game._score.text.contains(team):
 		_fail("Spectator HUD did not switch to computer teams")
 		return
 	print("Godot ↔ Scala passed: CPU vs CPU, autonomous catch, spectator camera and HUD")

@@ -4,9 +4,9 @@
 
 运行 `sbt "run 8080 watch"` 可启动电脑对战。双方使用同一套 AI，并使用各自的球员卡。
 
-每队人数由启动参数设置，原型支持 1 或 2 人，默认 1 人。例如 `sbt "run 8080 cpu random 2"`。开赛和控制继续走 `/matches/demo/start` 和 `/matches/demo/controls`。控制消息支持 `{"Pass":{"receiver":3}}` 和 `{"SwitchAthlete":{"athlete":3}}`，ID 来自当前阵容。切换时人类控制者和队友 AI 交换球员。
+每队可选 1、2 或 7 人，默认 1 人。可在大厅切换，也可用 `sbt "run 8080 cpu random 7"` 预选七人制。七人制使用格兰芬多与巴塞罗那阵容，双方争夺同一个鬼飞球。控制消息支持 `{"Pass":{"receiver":3}}` 和 `{"SwitchAthlete":{"athlete":3}}`，ID 来自当前阵容。切换时人类控制者和队友 AI 交换球员。Godot 中按 Tab 依次切换队友，持球时按 R 传给与瞄准方向最接近的队友。
 
-2 对 2 大厅可为格兰芬多选择进攻接应和防守战术，观战同样生效。`POST /matches/demo/start` 可随阵容提交 `"tactics":{"attackSupport":"Nearby","defense":"Cover"}`。进攻支持 `Nearby`（近距离接应）或 `Wide`（拉开接应），防守支持 `Pressure`（优先逼抢）或 `Cover`（优先回撤保护）。默认战术是 `Wide` 和 `Pressure`，斯莱特林使用默认战术。双方开赛时使用的战术随比赛快照保存。
+2 对 2 和 7 对 7 大厅可为格兰芬多选择进攻接应和防守战术，观战同样生效。`POST /matches/demo/start` 可随阵容提交 `"tactics":{"attackSupport":"Nearby","defense":"Cover"}`。进攻支持 `Nearby`（近距离接应）或 `Wide`（拉开接应），防守支持 `Pressure`（优先逼抢）或 `Cover`（优先回撤保护）。默认战术是 `Wide` 和 `Pressure`，客队使用默认战术。双方开赛时使用的战术随比赛快照保存。
 
 对手持球时，`logic/computer/TeamDefense.scala` 统一为防守方分工。逼抢战术由一名球员压迫持球人，人数和接球点允许时再分配球员封不同的传球线，其余人保护不同区域。只有队友明显更接近持球人时才交接盯防任务。回撤保护也使用这套分配，由盯防者优先守射门线，队友保护各自区域。
 
@@ -20,7 +20,7 @@
 | POST | `/auth/register` | 注册账号，提交 `username` 和 `password` |
 | POST | `/auth/login` | 校验密码并签发会话令牌 |
 | POST | `/auth/logout` | 撤销请求携带的会话令牌 |
-| GET | `/matches/lobby` | 获取球员卡、默认对战设置和开赛状态 |
+| GET | `/matches/lobby` | 获取各人数模式的可选球员卡与默认站位（`lineups`）、默认对战设置和开赛状态 |
 | POST | `/matches/demo/start` | 开赛，可提交 `teamSize`、`watch` 和首发球员 ID `athlete` |
 | GET | `/matches/demo` | 获取最近模拟帧 |
 | POST | `/matches/demo/controls` | 将操作排入下一模拟步 |
@@ -49,7 +49,7 @@ WHERE athlete_id = 1;
 | 3 | Ron Weasley | 格兰芬多 | 接球、短传、守门 | `Ron_Weasley_Gryffindor_1516467167167545344.glb` |
 | 4 | Vincent Crabbe | 斯莱特林 | 身体对抗、平衡、护球 | `Vincent_Crabbe_Slytherin_1516467169587666944.glb` |
 
-Godot 按球员 ID 加载从绑骨源文件导出的骑乘姿势和共用扫帚。四人的游戏网格位于 `client/assets/riders`。
+七人制球员卡的 ID 为 5 至 18，初始评分统一为 75。Godot 在 `client/assets/riders` 中按球员 ID 加载骑乘姿势和共用扫帚。七人制资产由 `client/tools/export_seven_aside_riders.py` 从本地模型导出，弗雷德和乔治使用同一份角色网格。
 
 本地调试使用 `home` 和 `away` 两个控制者。开赛后可向 `/matches/demo/controls` 发送下面的 JSON，设置主队球员的移动输入。
 

@@ -50,5 +50,187 @@
       "awareness": {"offense": 70, "defense": 70, "creativity": 70, "interception": 70},
       "goalkeeping": {"positioning": 70, "reflexes": 70, "reach": 70, "handling": 70}
     }
+  },
+  {
+    "id": 5,
+    "name": "Ginny Weasley",
+    "side": "Home",
+    "ratings": {
+      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
+      "physical": {"strength": 75, "balance": 75, "endurance": 75},
+      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
+      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
+      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
+      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+    }
+  },
+  {
+    "id": 6,
+    "name": "Katie Bell",
+    "side": "Home",
+    "ratings": {
+      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
+      "physical": {"strength": 75, "balance": 75, "endurance": 75},
+      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
+      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
+      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
+      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+    }
+  },
+  {
+    "id": 7,
+    "name": "Demelza Robins",
+    "side": "Home",
+    "ratings": {
+      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
+      "physical": {"strength": 75, "balance": 75, "endurance": 75},
+      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
+      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
+      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
+      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+    }
+  },
+  {
+    "id": 8,
+    "name": "Jimmy Peakes",
+    "side": "Home",
+    "ratings": {
+      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
+      "physical": {"strength": 75, "balance": 75, "endurance": 75},
+      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
+      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
+      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
+      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+    }
+  },
+  {
+    "id": 9,
+    "name": "Ritchie Coote",
+    "side": "Home",
+    "ratings": {
+      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
+      "physical": {"strength": 75, "balance": 75, "endurance": 75},
+      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
+      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
+      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
+      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+    }
+  },
+  {
+    "id": 10,
+    "name": "Fred Weasley",
+    "side": "Home",
+    "ratings": {
+      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
+      "physical": {"strength": 75, "balance": 75, "endurance": 75},
+      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
+      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
+      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
+      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+    }
+  },
+  {
+    "id": 11,
+    "name": "George Weasley",
+    "side": "Home",
+    "ratings": {
+      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
+      "physical": {"strength": 75, "balance": 75, "endurance": 75},
+      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
+      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
+      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
+      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+    }
+  },
+  {
+    "id": 12,
+    "name": "Gabriel Jesus",
+    "side": "Away",
+    "ratings": {
+      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
+      "physical": {"strength": 75, "balance": 75, "endurance": 75},
+      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
+      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
+      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
+      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+    }
+  },
+  {
+    "id": 13,
+    "name": "Joan Garcia",
+    "side": "Away",
+    "ratings": {
+      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
+      "physical": {"strength": 75, "balance": 75, "endurance": 75},
+      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
+      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
+      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
+      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+    }
+  },
+  {
+    "id": 14,
+    "name": "Jules Kounde",
+    "side": "Away",
+    "ratings": {
+      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
+      "physical": {"strength": 75, "balance": 75, "endurance": 75},
+      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
+      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
+      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
+      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+    }
+  },
+  {
+    "id": 15,
+    "name": "Karim Adeyemi",
+    "side": "Away",
+    "ratings": {
+      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
+      "physical": {"strength": 75, "balance": 75, "endurance": 75},
+      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
+      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
+      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
+      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+    }
+  },
+  {
+    "id": 16,
+    "name": "Lamine Yamal",
+    "side": "Away",
+    "ratings": {
+      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
+      "physical": {"strength": 75, "balance": 75, "endurance": 75},
+      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
+      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
+      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
+      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+    }
+  },
+  {
+    "id": 17,
+    "name": "Pau Cubarsi",
+    "side": "Away",
+    "ratings": {
+      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
+      "physical": {"strength": 75, "balance": 75, "endurance": 75},
+      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
+      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
+      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
+      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+    }
+  },
+  {
+    "id": 18,
+    "name": "Raphinha",
+    "side": "Away",
+    "ratings": {
+      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
+      "physical": {"strength": 75, "balance": 75, "endurance": 75},
+      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
+      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
+      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
+      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+    }
   }
 ]

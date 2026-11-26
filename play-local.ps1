@@ -1,7 +1,7 @@
 param(
     [string]$GodotExe,
     [ValidateRange(0, 65535)][int]$Port = 0,
-    [ValidateRange(1, 2)][int]$TeamSize = 1,
+    [ValidateSet(1, 2, 7)][int]$TeamSize = 1,
     [switch]$Smoke,
     [switch]$Watch
 )
@@ -44,7 +44,7 @@ $origin = "http://127.0.0.1:$Port"
 $runId = [Guid]::NewGuid().ToString('N')
 $backendLog = Join-Path $toolCache "backend-$runId.log"
 $backendErrors = Join-Path $toolCache "backend-$runId.err"
-$mode = if ($Watch) { 'watch' } elseif ($Smoke) { 'human' } else { 'cpu' }
+$mode = if ($Watch) { 'watch' } elseif ($Smoke -and $TeamSize -ne 7) { 'human' } else { 'cpu' }
 $backendArgs = @('-cp', ('"' + $classPath + '"'), 'services.system.Main', $Port, $mode)
 $seedArgument = if ($Smoke) { '42' } else { 'random' }
 $backendArgs += @($seedArgument, $TeamSize)
@@ -87,7 +87,9 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Godot integration check failed' }
     } else {
         $imports = Join-Path $project '.godot/imported'
-        $requiredModels = @('rider', 'pitch', 'broom', 'athlete_1', 'athlete_2', 'athlete_3', 'athlete_4')
+        $requiredModels = @('rider', 'pitch') + @(
+            Get-ChildItem -LiteralPath (Join-Path $project 'assets/riders') -Filter '*.glb' | ForEach-Object BaseName
+        )
         $missingModels = $requiredModels | Where-Object {
             -not (Get-ChildItem -LiteralPath $imports -Filter "$_.glb-*.scn" -ErrorAction SilentlyContinue)
         }

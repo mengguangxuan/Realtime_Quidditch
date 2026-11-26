@@ -2,18 +2,18 @@ extends RefCounted
 
 const FALLBACK := preload("res://assets/rider.glb")
 const BROOM := preload("res://assets/riders/broom.glb")
-const MODELS := {
-	1: preload("res://assets/riders/athlete_1.glb"),
-	2: preload("res://assets/riders/athlete_2.glb"),
-	3: preload("res://assets/riders/athlete_3.glb"),
-	4: preload("res://assets/riders/athlete_4.glb"),
-}
+
+static func model_path(athlete_id: int) -> String:
+	var model_id := 10 if athlete_id == 11 else athlete_id
+	return "res://assets/riders/athlete_%d.glb" % model_id
 
 
 static func create(athlete_id: int) -> Node3D:
-	if not MODELS.has(athlete_id):
+	var path := model_path(athlete_id)
+	if not ResourceLoader.exists(path, "PackedScene"):
 		return FALLBACK.instantiate()
+	var model := load(path) as PackedScene
 	var rider := Node3D.new()
-	rider.add_child(MODELS[athlete_id].instantiate())
+	rider.add_child(model.instantiate())
 	rider.add_child(BROOM.instantiate())
 	return rider

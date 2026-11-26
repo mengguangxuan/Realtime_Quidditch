@@ -165,14 +165,21 @@ object MatchSession:
     create(id, setup, 180L * ticksPerSecond, shotSeed, recordFrame)
       .fold(error => throw IllegalStateException(error), identity)
 
+  val demoTeamSizes = List(1, 2, 7)
+  private val sevenAsideIds = (5 to 18).map(AthleteId(_)).toSet
+
+  private[matches] def demoCards(cards: List[Athlete], teamSize: Int): List[Athlete] =
+    cards.filter(athlete => sevenAsideIds.contains(athlete.id) == (teamSize == 7)).sortBy(_.id.value)
+
   def demoSetup(cards: List[Athlete], computerOpponent: Boolean, computerHome: Boolean,
       teamSize: Int, selection: Option[AthleteId], homeTactics: TeamTactics = TeamTactics.default,
       startingPositions: Option[Map[AthleteId, Position]] = None): Either[String, MatchSetup] =
-    val home = cards.filter(_.side == Side.Home)
-    if teamSize < 1 || teamSize > 2 then return Left("Team size must be 1 or 2")
+    if !demoTeamSizes.contains(teamSize) then return Left("Team size must be 1, 2 or 7")
+    val available = demoCards(cards, teamSize)
+    val home = available.filter(_.side == Side.Home)
     if selection.exists(id => !home.exists(_.id == id)) then return Left("Choose a home athlete card")
     val homeCards = home.sortBy(athlete => !selection.contains(athlete.id)).take(teamSize)
-    val awayCards = cards.filter(_.side == Side.Away).take(teamSize)
+    val awayCards = available.filter(_.side == Side.Away).take(teamSize)
     if homeCards.size != teamSize || awayCards.size != teamSize then return Left(s"Each side needs $teamSize athlete cards")
     val roster = homeCards.zip(awayCards).flatMap((home, away) => List(home, away))
     val positions = startingPositions.filter(_.nonEmpty)
