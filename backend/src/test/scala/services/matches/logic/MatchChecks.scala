@@ -15,7 +15,7 @@ import services.matches.objects.*
 import services.matches.routes.MatchRoutes
 import services.matches.tables.athletecard.{AthleteCardTable, AthleteCardTableInitializer}
 import services.matches.tables.timeline.{TimelineTable, TimelineTableInitializer}
-import services.system.Database
+import services.system.{Database, databaseHandler}
 
 object MatchChecks:
   private lazy val cards = Using.resource(DriverManager.getConnection("jdbc:sqlite::memory:")) { connection =>
@@ -60,8 +60,12 @@ object MatchChecks:
     assert(matchSession.start().isRight)
     assert(matchSession.submit(PlayerId("guest"), Control.Charge) == Left(ActionRejection.PlayerNotInMatch))
     assert(matchSession.switchAthlete(home, AthleteId(2)) == Left(ActionRejection.AthleteNotOnPlayersSide))
-    val catchCommand = ApplyControlMessage(home, Control.Catch(CatchTarget.Quaffle))
-    assert(catchCommand.plan(matchSession).isRight)
+    val catchCommand = ApplyControlMessage(home, Control.Catch(CatchTarget.Quaffle), None, matchSession)
+    def requestCatch(): Unit =
+      assert(Using.resource(DriverManager.getConnection("jdbc:sqlite::memory:")) { connection =>
+        catchCommand.plan(connection).unsafeRunSync()
+      }.isRight)
+    requestCatch()
     val missed = matchSession.advance()
     assert(missed.events.isEmpty)
     assert(missed.state.athletes(homeAthlete).pose.flatMap(_.ballAction).exists(_.kind == BallAction.Reaching))
@@ -79,8 +83,7 @@ object MatchChecks:
       assert((matchSession.latest.state.athletes(athlete).flight.position.value - target).length < .4)
 
     steer(home, homeAthlete, Vec3(0, 0, 1.5))
-    assert(decode[ApplyControlMessage](catchCommand.asJson.noSpaces) == Right(catchCommand))
-    assert(catchCommand.plan(matchSession).isRight)
+    requestCatch()
     val caught = matchSession.advance()
     assert(caught.events.contains(MatchEvent.QuafflePossessionChanged(QuafflePossessionOutcome.Caught(homeAthlete))))
     val catchingAthlete = caught.state.athletes(homeAthlete)
@@ -760,7 +763,8 @@ object MatchChecks:
       assert(oldFrame.events.contains(MatchEvent.ContactAttempted(AthleteId(1), ContactKind.Charge)))
       assert(oldFrame.tick == newFrame.tick && oldFrame.state.id != newFrame.state.id)
       val server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)
-      server.createContext("/", MatchRoutes(MatchSession.demo(cards, id = current), Some(path)))
+      val routes = MatchRoutes(MatchSession.demo(cards, id = current))
+      server.createContext("/", databaseHandler(path)((exchange, connection) => routes.route(exchange, None, connection)))
       server.start()
       val client = HttpClient.newHttpClient()
       try
@@ -781,8 +785,10 @@ object MatchChecks:
 
   private def checkHttp(): Unit =
     val session = MatchSession.demo(cards)
+    val path = Files.createTempFile("quidditch-http-", ".sqlite3")
+    val routes = MatchRoutes(session)
     val server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)
-    server.createContext("/", MatchRoutes(session))
+    server.createContext("/", databaseHandler(path)((exchange, connection) => routes.route(exchange, None, connection)))
     server.start()
     val client = HttpClient.newHttpClient()
     try
@@ -806,3 +812,4 @@ object MatchChecks:
     finally
       client.close()
       server.stop(0)
+      List(path, Path.of(s"$path-wal"), Path.of(s"$path-shm")).foreach(Files.deleteIfExists)

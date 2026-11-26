@@ -1,113 +1,75 @@
 package services.matches.routes
 
-import cats.effect.unsafe.implicits.global
-import com.sun.net.httpserver.{HttpExchange, HttpHandler}
+import cats.effect.IO
+import com.sun.net.httpserver.HttpExchange
 import io.circe.Json
-import io.circe.parser.decode
+import io.circe.parser.{decode, parse}
 import io.circe.syntax.*
 import java.nio.charset.StandardCharsets.UTF_8
-import java.nio.file.Path
-import scala.util.control.NonFatal
-import services.matches.api.ApplyControlMessage
-import services.matches.logic.{MatchSession, MatchSimulation}
-import services.matches.objects.{MatchId, MatchPhase, Pitch, PlayerId, PlayerKind, Side, SimulationTick, TeamTactics}
+import java.sql.Connection
+import services.matches.api.*
+import services.matches.logic.MatchSession
+import services.matches.objects.{ActionRejection, Control, MatchId, PlayerId, SimulationTick}
 import services.matches.objects.apiTypes.MatchSelection
-import services.matches.tables.athletecard.AthleteCardTable
-import services.matches.tables.timeline.TimelineTable
-import services.system.Database
+import services.system.errorJson
 
-final class MatchRoutes(session: MatchSession, database: Option[Path] = None, localControlsOnly: Boolean = false,
-    computerOpponent: Boolean = true)
-    extends HttpHandler:
-  override def handle(exchange: HttpExchange): Unit =
-    try
-      val (status, json) = try route(exchange)
-        catch case NonFatal(exception) =>
-          System.err.println(s"Request failed: ${exception.getMessage}")
-          500 -> error("Could not complete the request")
-      val bytes = json.noSpaces.getBytes(UTF_8)
-      exchange.getResponseHeaders.set("Content-Type", "application/json; charset=utf-8")
-      exchange.sendResponseHeaders(status, bytes.length.toLong)
-      exchange.getResponseBody.write(bytes)
-    finally exchange.close()
-
-  private def route(exchange: HttpExchange): (Int, Json) =
+private[matches] final class MatchRoutes(session: MatchSession, computerOpponent: Boolean = true):
+  def route(exchange: HttpExchange, username: Option[String], connection: Connection): IO[(Int, Json)] =
     val path = exchange.getRequestURI.getPath.stripSuffix("/")
     (exchange.getRequestMethod, path) match
-      case ("GET", "/health") => 200 -> Json.obj("status" -> "ok".asJson)
-      case ("GET", "/matches/demo") => 200 -> session.latest.asJson
-      case ("GET", "/matches/lobby") if database.nonEmpty =>
-        val state = session.latest.state
-        val setup = state.setup
-        val watch = setup.players.forall(_.kind == PlayerKind.Computer)
-        val available = cards
-        val smallRoster = MatchSession.demoCards(available, 2)
-        val lineups = MatchSession.demoTeamSizes.map { size =>
-          val slots = (0 until size).map(index => MatchSimulation.startingSlot(Side.Home, index, size))
-          size.toString -> Json.obj("cards" -> MatchSession.demoCards(available, size).asJson, "slots" -> slots.asJson,
-            "keepers" -> Side.values.flatMap(side => MatchSession.demoKeeper(side, size)).toList.asJson)
+      case ("GET", "/health") => IO.pure(200 -> Json.obj("status" -> "ok".asJson))
+      case ("GET", "/matches/demo") =>
+        GetMatchSnapshotMessage(session).plan(connection).map(frame => 200 -> frame.asJson)
+      case ("GET", "/matches/lobby") =>
+        GetLobbyMessage(session).plan(connection).map(lobby => 200 -> lobby.asJson)
+      case ("POST", "/matches/demo/start") =>
+        withBody(exchange, 4096) { body =>
+          val selection = if body.isEmpty then Right(None)
+            else decode[MatchSelection](body).left.map(_ => "Invalid match selection").map(Some(_))
+          StartMatchMessage(selection, username, session, computerOpponent).plan(connection).map {
+            case Right(frame) => 200 -> frame.asJson
+            case Left("match_unavailable") => 403 -> errorJson("match_unavailable")
+            case Left(reason: String) => 400 -> errorJson(reason)
+            case Left(rejection: ActionRejection) => 409 -> rejection.asJson
+          }
         }
-        val pitch = Pitch.alpine
-        val smallSlots = smallRoster.count(_.side == Side.Home)
-        val positioning = Json.obj(
-          "slots" -> (0 until smallSlots).map(index => MatchSimulation.startingSlot(Side.Home, index)).asJson,
-          "halfLength" -> pitch.halfLength.asJson,
-          "halfWidth" -> pitch.halfWidth.asJson, "goalPlaneX" -> pitch.goalPlaneX.asJson,
-          "clearance" -> MatchSimulation.startingClearance.asJson, "spacing" -> MatchSimulation.startingSpacing.asJson)
-        200 -> Json.obj("cards" -> smallRoster.asJson, "lineups" -> Json.obj(lineups*),
-          "teamSize" -> (setup.roster.size / 2).asJson,
-          "watch" -> watch.asJson, "active" -> (state.phase != MatchPhase.Ready).asJson,
-          "homeTactics" -> setup.tacticsFor(Side.Home).asJson, "positioning" -> positioning)
-      case ("POST", "/matches/demo/start") => start(exchange)
       case ("POST", "/matches/demo/controls") =>
-        val body = exchange.getRequestBody.readNBytes(8193)
-        if body.length > 8192 then 413 -> error("Request body is too large")
-        else
-          val message = try decode[ApplyControlMessage](new String(body, UTF_8)).left.map(_.getMessage)
-            catch case NonFatal(_) => Left("Invalid control data")
-          message match
-            case Left(detail) => 400 -> error(detail)
-            case Right(command) =>
-              val local = if localControlsOnly then command.copy(player = PlayerId("home"))
-                else command
-              local.plan(session).fold(
-                rejection => 409 -> rejection.asJson,
-                tick => 202 -> Json.obj("scheduledTick" -> tick.asJson)
-              )
+        withBody(exchange, 8192) { body =>
+          val command = for
+            json <- parse(body)
+            player <- json.hcursor.get[PlayerId]("player")
+            control <- json.hcursor.get[Control]("control")
+          yield ApplyControlMessage(player, control, username, session)
+          command match
+            case Left(error) => IO.pure(400 -> errorJson(error.getMessage))
+            case Right(message) => message.plan(connection).map {
+              case Right(tick) => 202 -> Json.obj("scheduledTick" -> tick.asJson)
+              case Left(reason: String) => 403 -> errorJson(reason)
+              case Left(rejection: ActionRejection) => 409 -> rejection.asJson
+            }
+        }
       case ("GET", history) if history.startsWith("/matches/demo/timeline/") =>
-        val tick = history.stripPrefix("/matches/demo/timeline/").toLongOption
-        tick.flatMap(value => session.frame(SimulationTick(value)))
-          .fold(404 -> error("Timeline frame not found"))(view => 200 -> view.asJson)
-      case ("GET", "/matches/history") if database.nonEmpty =>
-        val matches = database.toList.flatMap(path =>
-          Database.connect(path).use(TimelineTable.listMatches).unsafeRunSync())
-        200 -> matches.asJson
+        readFrame(history.stripPrefix("/matches/demo/timeline/"), None, connection)
+      case ("GET", "/matches/history") =>
+        ListMatchHistoryMessage().plan(connection).map(matches => 200 -> matches.asJson)
       case ("GET", history) if history.startsWith("/matches/history/") =>
         history.stripPrefix("/matches/history/").split("/").toList match
-          case id :: "timeline" :: tick :: Nil =>
-            val frame = for
-              path <- database
-              number <- tick.toLongOption.filter(_ >= 0)
-              saved <- Database.connect(path).use(TimelineTable.find(_, MatchId(id), SimulationTick(number)))
-                .unsafeRunSync()
-            yield saved
-            frame.fold(404 -> error("Timeline frame not found"))(view => 200 -> view.asJson)
-          case _ => 404 -> error("Route not found")
-      case _ => 404 -> error("Route not found")
+          case id :: "timeline" :: tick :: Nil => readFrame(tick, Some(MatchId(id)), connection)
+          case _ => IO.pure(404 -> errorJson("Route not found"))
+      case _ => IO.pure(404 -> errorJson("Route not found"))
 
-  private def cards = database.toList.flatMap(path =>
-    Database.connect(path).use(AthleteCardTable.list).unsafeRunSync())
+  private def withBody(exchange: HttpExchange, limit: Int)(handle: String => IO[(Int, Json)]): IO[(Int, Json)] =
+    IO.blocking(exchange.getRequestBody.readNBytes(limit + 1)).flatMap { body =>
+      if body.length > limit then IO.pure(413 -> errorJson("Request body is too large"))
+      else handle(new String(body, UTF_8))
+    }
 
-  private def start(exchange: HttpExchange): (Int, Json) =
-    val body = exchange.getRequestBody.readNBytes(4097)
-    if body.length > 4096 then return 413 -> error("Request body is too large")
-    val lineup =
-      if body.isEmpty then Right(None)
-      else decode[MatchSelection](new String(body, UTF_8)).left.map(_ => "Invalid match selection")
-        .flatMap(choice => MatchSession.demoSetup(cards, computerOpponent || choice.watch, choice.watch,
-          choice.teamSize, Some(choice.athlete), choice.tactics.getOrElse(TeamTactics.default),
-          choice.startingPositions)).map(Some(_))
-    lineup.fold(detail => 400 -> error(detail),
-      setup => session.start(setup).fold(rejection => 409 -> rejection.asJson, view => 200 -> view.asJson))
-
-  private def error(detail: String): Json = Json.obj("error" -> detail.asJson)
+  private def readFrame(tick: String, id: Option[MatchId], connection: Connection): IO[(Int, Json)] =
+    val missing = 404 -> errorJson("Timeline frame not found")
+    tick.toLongOption.filter(_ >= 0) match
+      case None => IO.pure(missing)
+      case Some(value) =>
+        GetMatchFrameMessage(SimulationTick(value), id, session).plan(connection).map {
+          case Some(frame) => 200 -> frame.asJson
+          case None => missing
+        }

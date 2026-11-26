@@ -4,7 +4,7 @@ import java.util.concurrent.ThreadLocalRandom
 import services.matches.objects.*
 import MatchSimulation.{Inputs, begin, formation, resume, ticksPerSecond}
 
-final class MatchSession private (initial: MatchState, shotSeed: Long, recordFrame: TimelineFrame => Unit,
+private[matches] final class MatchSession private (initial: MatchState, shotSeed: Long, recordFrame: TimelineFrame => Unit,
     rules: MatchRules):
   private val opening = TimelineFrame(SimulationTick(0), initial, Nil)
   recordFrame(opening)
@@ -13,6 +13,24 @@ final class MatchSession private (initial: MatchState, shotSeed: Long, recordFra
   private var nextControls = Option.empty[List[ControlAssignment]]
   private var inputs = Inputs()
   private var restartTicks = 0
+  private var owner = Option.empty[String]
+
+  private[matches] def mayStart(username: String): Boolean = synchronized(owner.forall(_ == username))
+
+  private[matches] def startFor(username: Option[String], lineup: Option[MatchSetup])
+      : Either[String | ActionRejection, TimelineFrame] = synchronized {
+    if username.exists(name => !mayStart(name)) then Left("match_unavailable")
+    else start(lineup).map { frame =>
+      if username.nonEmpty then owner = username
+      frame
+    }
+  }
+
+  private[matches] def submitFor(username: String, control: Control): Either[String | ActionRejection, SimulationTick] =
+    synchronized {
+      if owner.contains(username) then submit(PlayerId("home"), control)
+      else Left("match_unavailable")
+    }
 
   def latest: TimelineFrame = synchronized(timeline.frames.last)
 
@@ -129,7 +147,7 @@ final class MatchSession private (initial: MatchState, shotSeed: Long, recordFra
     timeline = timeline.copy(frames = timeline.frames :+ saved)
     saved
 
-object MatchSession:
+private[matches] object MatchSession:
   def create(id: MatchId, setup: MatchSetup, durationTicks: Long,
       shotSeed: Long = ThreadLocalRandom.current().nextLong(),
       recordFrame: TimelineFrame => Unit = _ => (), rules: MatchRules = MatchRules.standard): Either[String, MatchSession] =

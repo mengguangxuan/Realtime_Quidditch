@@ -2,29 +2,19 @@ package services.system
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import com.sun.net.httpserver.HttpServer
+import com.sun.net.httpserver.{HttpHandler, HttpServer}
 import java.net.InetSocketAddress
-import java.nio.file.Path
-import java.util.UUID
-import java.util.concurrent.{CountDownLatch, Executors, ThreadLocalRandom, TimeUnit}
+import java.util.concurrent.{CountDownLatch, Executors, TimeUnit}
 import scala.util.control.NonFatal
-import services.matches.logic.MatchSession
-import services.matches.objects.MatchId
-import services.matches.routes.MatchRoutes
-import services.matches.tables.athletecard.{AthleteCardTable, AthleteCardTableInitializer}
-import services.matches.tables.timeline.{TimelineTable, TimelineTableInitializer}
-import services.users.routes.AuthRoutes
-import services.users.tables.account.AccountTableInitializer
+import services.matches.api.InitializeMatchMessage
+import services.users.api.InitializeUsersMessage
 
 object Main:
   def main(args: Array[String]): Unit =
     val port = args.headOption.fold(8080)(_.toInt)
     val mode = args.lift(1).getOrElse("cpu")
-    val computerHome = mode == "watch"
-    val computerOpponent = mode != "human"
-    val shotSeed = args.lift(2).flatMap(_.toLongOption).getOrElse(ThreadLocalRandom.current().nextLong())
+    val shotSeed = args.lift(2).flatMap(_.toLongOption)
     val teamSize = args.lift(3).fold(1)(_.toInt)
-    require(MatchSession.demoTeamSizes.contains(teamSize), "Demo team size must be 1, 2 or 7")
     val path = Database.path
     val stopped = CountDownLatch(1)
     val closed = CountDownLatch(1)
@@ -36,31 +26,25 @@ object Main:
     try
       Database.connect(path).use { connection =>
         for
-          _ <- TimelineTableInitializer.initialize(connection)
-          _ <- AthleteCardTableInitializer.initialize(connection)
-          _ <- AccountTableInitializer.initialize(connection)
-          cards <- AthleteCardTable.list(connection)
-          _ <- IO.blocking {
-            val id = MatchId(UUID.randomUUID().toString)
-            val session = MatchSession.demo(cards, computerOpponent, shotSeed, computerHome, id,
-              frame => TimelineTable.insert(connection, frame).unsafeRunSync(), teamSize)
-            println(s"Recording match ${id.value} in $path")
-            serve(port, session, path, stopped, computerOpponent)
-          }
+          matchRuntime <- InitializeMatchMessage(mode, shotSeed, teamSize).plan(connection)
+          (id, matchRoutes, advance) = matchRuntime
+          usersRuntime <- InitializeUsersMessage().plan(connection)
+          (userRoutes, resolveUser) = usersRuntime
+          handler = applicationHandler(path, userRoutes, resolveUser, matchRoutes)
+          _ <- IO.println(s"Recording match ${id.value} in $path")
+          _ <- IO.blocking(serve(port, handler, advance, stopped))
         yield ()
       }.unsafeRunSync()
     finally closed.countDown()
 
-  private def serve(port: Int, session: MatchSession, path: Path, stopped: CountDownLatch,
-      computerOpponent: Boolean): Unit =
+  private def serve(port: Int, handler: HttpHandler, advance: IO[Unit], stopped: CountDownLatch): Unit =
     val server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0)
     val clock = Executors.newSingleThreadScheduledExecutor()
-    server.createContext("/", AuthRoutes(path,
-      MatchRoutes(session, Some(path), localControlsOnly = true, computerOpponent = computerOpponent)))
+    server.createContext("/", handler)
     server.start()
     clock.scheduleAtFixedRate(
       (() =>
-        try { session.advance(); () }
+        try advance.unsafeRunSync()
         catch case NonFatal(error) => System.err.println(s"Simulation step failed: ${error.getMessage}")
       ): Runnable, 50, 50, TimeUnit.MILLISECONDS
     )

@@ -7,7 +7,7 @@ import java.sql.Connection
 import scala.util.Using
 import services.matches.objects.{MatchId, SimulationTick, TimelineFrame}
 
-object TimelineTable:
+private[matches] object TimelineTable:
   private val insertSql = "INSERT INTO match_timeline(match_id, tick, frame) VALUES (?, ?, ?)"
 
   def insert(connection: Connection, frame: TimelineFrame): IO[Unit] = IO.blocking {

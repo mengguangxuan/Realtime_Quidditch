@@ -5,7 +5,7 @@ import java.sql.Connection
 import scala.io.Source
 import scala.util.Using
 
-object AthleteCardTableInitializer:
+private[matches] object AthleteCardTableInitializer:
   private val createTableSql =
     """CREATE TABLE IF NOT EXISTS athlete_cards (
       |  athlete_id INTEGER PRIMARY KEY,

@@ -1,13 +1,16 @@
 package services.matches.api
 
-import io.circe.Codec
-import io.circe.generic.semiauto.deriveCodec
+import cats.effect.IO
+import java.sql.Connection
 import services.matches.logic.MatchSession
 import services.matches.objects.*
+import services.system.api.APIMessage
 
-final case class ApplyControlMessage(player: PlayerId, control: Control):
-  def plan(session: MatchSession): Either[ActionRejection, SimulationTick] =
-    session.submit(player, control)
-
-object ApplyControlMessage:
-  given Codec.AsObject[ApplyControlMessage] = deriveCodec[ApplyControlMessage]
+final case class ApplyControlMessage(player: PlayerId, control: Control, username: Option[String],
+    private val session: MatchSession) extends APIMessage[Either[String | ActionRejection, SimulationTick]]:
+  override def plan(connection: Connection): IO[Either[String | ActionRejection, SimulationTick]] =
+    IO.delay {
+      username match
+        case Some(name) => session.submitFor(name, control)
+        case None => session.submit(player, control)
+    }

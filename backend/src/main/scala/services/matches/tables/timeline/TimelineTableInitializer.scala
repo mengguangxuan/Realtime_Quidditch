@@ -4,7 +4,7 @@ import cats.effect.IO
 import java.sql.Connection
 import scala.util.Using
 
-object TimelineTableInitializer:
+private[matches] object TimelineTableInitializer:
   private val createTableSql =
     """CREATE TABLE IF NOT EXISTS match_timeline (
       |  match_id TEXT NOT NULL,

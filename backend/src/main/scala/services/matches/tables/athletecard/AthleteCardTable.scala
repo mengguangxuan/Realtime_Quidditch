@@ -6,7 +6,7 @@ import java.sql.Connection
 import scala.util.Using
 import services.matches.objects.Athlete
 
-object AthleteCardTable:
+private[matches] object AthleteCardTable:
   private val listSql = "SELECT athlete_id, card FROM athlete_cards ORDER BY athlete_id"
 
   def list(connection: Connection): IO[List[Athlete]] = IO.blocking {

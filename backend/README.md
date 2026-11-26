@@ -14,21 +14,23 @@
 
 每次启动分配独立的比赛 ID，并将第 0 帧和后续模拟帧立即写入本地 SQLite。数据库默认位于 `backend/data/matches.sqlite3`，可通过 `QUIDDITCH_DB_PATH` 指定路径。每帧包含完整的比赛状态和当步事件。服务重启会开新局，旧帧仍可通过历史接口查询。
 
-| 方法 | 路径 | 用途 |
-| --- | --- | --- |
-| GET | `/health` | 检查服务 |
-| POST | `/auth/register` | 注册账号，提交 `username` 和 `password` |
-| POST | `/auth/login` | 校验密码并签发会话令牌 |
-| POST | `/auth/logout` | 撤销请求携带的会话令牌 |
-| GET | `/matches/lobby` | 获取各人数模式的可选球员卡与默认站位（`lineups`）、默认对战设置和开赛状态 |
-| POST | `/matches/demo/start` | 开赛，可提交 `teamSize`、`watch` 和首发球员 ID `athlete` |
-| GET | `/matches/demo` | 获取最近模拟帧 |
-| POST | `/matches/demo/controls` | 将操作排入下一模拟步 |
-| GET | `/matches/demo/timeline/{tick}` | 按模拟帧编号查询历史快照和事件 |
-| GET | `/matches/history` | 按启动时间倒序列出已记录的比赛 ID |
-| GET | `/matches/history/{matchId}/timeline/{tick}` | 按比赛 ID 和帧号读取数据库中的快照和事件 |
+| 方法 | 路径 | API 消息 | 用途 |
+| --- | --- | --- | --- |
+| GET | `/health` | — | 检查服务 |
+| POST | `/auth/register` | `RegisterMessage` | 注册账号，提交 `username` 和 `password` |
+| POST | `/auth/login` | `LoginMessage` | 校验密码并签发会话令牌 |
+| POST | `/auth/logout` | `LogoutMessage` | 撤销请求携带的会话令牌 |
+| GET | `/matches/lobby` | `GetLobbyMessage` | 获取各人数模式的球员卡、默认站位和开赛状态 |
+| POST | `/matches/demo/start` | `StartMatchMessage` | 开赛，可提交 `teamSize`、`watch` 和首发球员 ID `athlete` |
+| GET | `/matches/demo` | `GetMatchSnapshotMessage` | 获取最近模拟帧 |
+| POST | `/matches/demo/controls` | `ApplyControlMessage` | 将操作排入下一模拟步 |
+| GET | `/matches/demo/timeline/{tick}` | `GetMatchFrameMessage` | 按模拟帧编号查询当前比赛快照和事件 |
+| GET | `/matches/history` | `ListMatchHistoryMessage` | 按启动时间倒序列出已记录的比赛 ID |
+| GET | `/matches/history/{matchId}/timeline/{tick}` | `GetMatchFrameMessage` | 按比赛 ID 和帧号读取数据库中的快照和事件 |
 
 比赛接口需要 `Authorization: Bearer <token>`。当前每次启动提供一场本地比赛，开赛账号拥有该场的操作权限，控制侧由后端绑定为主队。账号密码以加盐 PBKDF2 哈希存入 SQLite。会话保存在后端内存中，8 小时后或后端重启后失效。
+
+系统通过 `InitializeUsersMessage` 和 `InitializeMatchMessage` 装配服务。HTTP 入口通过用户服务的 `ResolveSessionMessage` 解析可信身份，再把请求交给比赛路由。路由解析请求并调用消息的 `plan(connection)`。账号、球员卡和时间轴表目前只由所属服务访问。
 
 ## 原型球员
 

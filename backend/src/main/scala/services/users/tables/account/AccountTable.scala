@@ -4,7 +4,7 @@ import cats.effect.IO
 import java.sql.Connection
 import scala.util.Using
 
-object AccountTable:
+private[users] object AccountTable:
   private val insertSql =
     "INSERT INTO accounts(username, salt, password_hash) VALUES (?, ?, ?) ON CONFLICT(username) DO NOTHING"
 
