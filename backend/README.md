@@ -10,6 +10,8 @@
 
 对手持球时，`logic/computer/TeamDefense.scala` 统一为防守方分工。逼抢战术由一名球员压迫持球人，人数和接球点允许时再分配球员封不同的传球线，其余人保护不同区域。只有队友明显更接近持球人时才交接盯防任务。回撤保护也使用这套分配，由盯防者优先守射门线，队友保护各自区域。
 
+大厅右侧可在俯视图选择格兰芬多球员的开场站位，摆位和左侧的首发球员选择相互独立。`POST /matches/demo/start` 接受可选的 `startingPositions`，例如 `{"3":{"value":{"x":-21,"y":-7,"z":7}}}`。位置必须在己方可用区域，队友之间至少相距三米，高度沿用 7 米。未编辑的球员按默认阵型开场。自定义站位随比赛配置和首帧保存，进球后的重开沿用比赛现有规则。
+
 每次启动分配独立的比赛 ID，并将第 0 帧和后续模拟帧立即写入本地 SQLite。数据库默认位于 `backend/data/matches.sqlite3`，可通过 `QUIDDITCH_DB_PATH` 指定路径。每帧包含完整的比赛状态和当步事件。服务重启会开新局，旧帧仍可通过历史接口查询。
 
 | 方法 | 路径 | 用途 |
@@ -80,3 +82,9 @@ Godot 按球员 ID 加载从绑骨源文件导出的骑乘姿势和共用扫帚�
 - **防守方有身位优势时过早回撤。** 防守球员已经占住持球者通往球门的路线，仍经常转身回去守门。后续验收时要能看到防守者保持身位，在能合法接触时主动上对抗，尝试打断进攻。
 
 复查时使用现有电脑对战模式，通过比赛 ID 和模拟帧号对照球员位置、速度、持球状态和对抗或出手事件。
+
+## 战术 AI 开源参考
+
+- **Open Soccer**。先给最有威胁的接应者分配一名够近的防守人，盯防点偏向己方球门。短传接应、拉宽、前插和留位分给不同球员。球离手后保留预定接球人，可借鉴这段上下文来设计对二过一的防守。 [盯人与进攻分工](https://github.com/modelence/open-soccer/blob/main/src/client/game/engine.ts#L1787-L1935) · [传球接应](https://github.com/modelence/open-soccer/blob/main/src/client/game/engine.ts#L1215-L1234)
+- **Cyrus2D**。预测持球人的推进路线，选能提前到达截断点的人。球员离开阵位的距离和冲刺消耗也参与判断，可用来改进当前按距离选逼抢者的做法。 [拦截源码](https://github.com/Cyrus2D/Cyrus2DBase/blob/cyrus2d/src/player/bhv_basic_block.cpp) · [算法说明](https://arxiv.org/html/2211.08585#S3.SS1)
+- **Google Research Football**。在预测球路上比较球和球员的到达时间，并给接近上一目标的选择一定权重。可用现有飞行模拟估计拦截时机，减少防守者反复变向。 [拦截评分源码](https://github.com/google-research/football/blob/master/third_party/gfootball_engine/src/onthepitch/AIsupport/AIfunctions.cpp)

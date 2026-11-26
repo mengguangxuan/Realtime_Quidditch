@@ -119,6 +119,7 @@ object MatchChecks:
     })
     checkHttp()
     checkHistory()
+    checkStartingFormation()
     checkRiderMovement(demo)
     checkShotsAndBlocks(demo)
     checkCatchPressure(demo)
@@ -248,6 +249,27 @@ object MatchChecks:
     val score = session.latest.state.score
     assert(scoreFromEvents(Score(0, 0), events ++ session.latest.events) == score)
     println(s"CPU vs CPU (seed 42): ${score.home}-${score.away}, $releases releases, $blocks blocks, $attempts contact attempts, $contacts contacts")
+
+  private def checkStartingFormation(): Unit =
+    val primary = AthleteId(3)
+    val teammate = AthleteId(1)
+    val initialPosition = Position(Vec3(-21, -7, 7))
+    val starting = Map(teammate -> initialPosition)
+    def setup(positions: Map[AthleteId, Position]): Either[String, MatchSetup] =
+      MatchSession.demoSetup(cards, true, true, 2, Some(primary), startingPositions = Some(positions))
+    val arranged = setup(starting).toOption.get
+    val session = MatchSession.demo(cards, teamSize = 2)
+    val opening = session.start(Some(arranged)).toOption.get
+    assert(opening.state.setup.startingPositions.contains(starting))
+    assert(opening.state.athletes(teammate).flight.position == initialPosition)
+    assert(opening.state.athletes(primary).flight.position == MatchSimulation.startingSlot(Side.Home, 0))
+    assert(decode[TimelineFrame](opening.asJson.noSpaces) == Right(opening))
+    assert(arranged.asJson.mapObject(_.remove("startingPositions")).as[MatchSetup] ==
+      Right(arranged.copy(startingPositions = None)))
+    assert(setup(Map(teammate -> MatchSimulation.startingSlot(Side.Home, 0))).left.toOption.contains("Starting players too close"))
+    assert(setup(Map(teammate -> Position(Vec3(8, 0, 7)))).left.toOption.contains("Invalid starting position"))
+    assert(setup(Map(teammate -> Position(Vec3(-34, 26, 7)))).left.toOption.contains("Invalid starting position"))
+    assert(setup(Map(AthleteId(2) -> initialPosition)).left.toOption.contains("Invalid starting athlete"))
 
   private def checkRiderMovement(demo: MatchState): Unit =
     val rider = demo.setup.roster.head

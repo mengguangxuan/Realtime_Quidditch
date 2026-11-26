@@ -10,6 +10,9 @@ private[matches] object MatchSimulation:
   val stepSeconds = 1.0 / ticksPerSecond
   private val kickoff = Vec3(0, 0, 7)
   private val emptySpecial = SpecialBalls(Map.empty, None)
+  val startingHeight = 7.0
+  val startingClearance = 3.0
+  val startingSpacing = 3.0
 
   final case class ContactAttempt(kind: ContactKind, expiresAt: Long)
 
@@ -28,18 +31,37 @@ private[matches] object MatchSimulation:
 
   def initialAthlete(side: Side): AthleteState =
     val (x, facing) = if side == Side.Home then (-23.0, Direction.east) else (23.0, Direction.west)
-    AthleteState(FlightState(Position(Vec3(x, 0, 7)), Velocity(Vec3.zero), facing),
+    AthleteState(FlightState(Position(Vec3(x, 0, startingHeight)), Velocity(Vec3.zero), facing),
       Stamina(100), Stability(100), MovementMode.Normal)
 
-  def formation(roster: List[Athlete]): Map[AthleteId, AthleteState] =
+  def startingSlot(side: Side, index: Int): Position =
+    val start = initialAthlete(side).flight.position.value
+    val sign = if side == Side.Home then 1 else -1
+    Position(start + Vec3(0, sign * index * 8, 0))
+
+  def formation(roster: List[Athlete], positions: Map[AthleteId, Position] = Map.empty): Map[AthleteId, AthleteState] =
     Side.values.toList.flatMap { side =>
-      val sign = if side == Side.Home then 1 else -1
       roster.filter(_.side == side).zipWithIndex.map { (athlete, slot) =>
         val entry = initialAthlete(side)
-        val offset = Vec3(0, sign * slot * 8, 0)
-        athlete.id -> entry.copy(flight = entry.flight.copy(position = Position(entry.flight.position.value + offset)))
+        val position = positions.getOrElse(athlete.id, startingSlot(side, slot))
+        athlete.id -> entry.copy(flight = entry.flight.copy(position = position))
       }
     }.toMap
+
+  def startingPositionsValid(roster: List[Athlete], positions: Map[AthleteId, Position]): Either[String, Unit] =
+    val home = roster.filter(_.side == Side.Home)
+    val pitch = Pitch.alpine
+    val points = home.zipWithIndex.map { (athlete, index) =>
+      positions.getOrElse(athlete.id, startingSlot(Side.Home, index)).value
+    }
+    if !positions.keySet.subsetOf(home.map(_.id).toSet) then Left("Invalid starting athlete")
+    else if !points.forall(point =>
+      point.x >= -pitch.goalPlaneX && point.x <= -startingClearance && point.z == startingHeight &&
+        math.hypot(point.x / pitch.halfLength, point.y / pitch.halfWidth) <= 1
+    ) then Left("Invalid starting position")
+    else if points.combinations(2).exists(pair => (pair.head - pair.last).length < startingSpacing) then
+      Left("Starting players too close")
+    else Right(())
 
   def begin(state: MatchState): MatchState =
     state.copy(phase = MatchPhase.InPlay(MatchBalls(free(kickoff), emptySpecial)))

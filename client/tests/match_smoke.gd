@@ -53,6 +53,8 @@ func _run() -> void:
 				lobby._choose(card)
 				selected = 3
 	var team_play: bool = lobby._modes.selected % 2 == 1
+	var positioned := 0
+	var opening_point := Vector2(-20, -10)
 	if lobby._tactics_panel.visible != team_play:
 		_fail("Tactics should be shown for 2v2")
 		return
@@ -62,6 +64,23 @@ func _run() -> void:
 	if team_play:
 		lobby._attack_support.select(1)
 		lobby._defense.select(1)
+		if lobby._modes.selected >= 2:
+			await process_frame
+			lobby._formation_player.select(1)
+			positioned = int(lobby._opening_players[1]["id"])
+			var click := InputEventMouseButton.new()
+			click.button_index = MOUSE_BUTTON_LEFT
+			click.pressed = true
+			click.position = lobby._map_position(lobby._starting_point(0))
+			lobby._place_player(click)
+			if lobby._formation_edits.has(positioned):
+				_fail("Overlapping starting positions were accepted")
+				return
+			click.position = lobby._map_position(opening_point)
+			lobby._place_player(click)
+			if not lobby._formation_edits.has(positioned):
+				_fail("The formation editor did not place the selected teammate")
+				return
 	var lobby_id: int = lobby.get_instance_id()
 	lobby._start()
 	if not await _until(func() -> bool: return current_scene.get_instance_id() != lobby_id, 6.0):
@@ -94,6 +113,8 @@ func _run() -> void:
 		"attackSupport": "Wide", "defense": "Pressure"}
 	if tactics["home"] != home_tactics or tactics["away"] != {"attackSupport": "Wide", "defense": "Pressure"}:
 		_fail("The server did not save the selected tactics for the correct side")
+		return
+	if positioned != 0 and not await _check_opening_position(positioned, opening_point):
 		return
 	for id: String in game._rider_visuals:
 		var model: Node3D = game._rider_visuals[id].get_child(0)
@@ -161,6 +182,25 @@ func _run() -> void:
 		return
 	print("Godot ↔ Scala passed: imported scene, start, fly, catch, shoot, scoreboard")
 	quit(0)
+
+
+func _check_opening_position(athlete: int, expected: Vector2) -> bool:
+	var request := HTTPRequest.new()
+	request.timeout = 5
+	root.add_child(request)
+	request.request(MatchApi.backend_origin() + "/matches/demo/timeline/1", ["Authorization: Bearer " + game.api.token])
+	var response: Array = await request.request_completed
+	request.queue_free()
+	if response[1] == 200:
+		var snapshot: Dictionary = JSON.parse_string(response[3].get_string_from_utf8())
+		var state: Dictionary = snapshot["state"]
+		var key := str(athlete)
+		var position: Dictionary = state["athletes"][key]["flight"]["position"]["value"]
+		var saved: Dictionary = state["setup"].get("startingPositions", {}).get(key, {}).get("value", {})
+		if position == saved and Vector2(position["x"], position["y"]).is_equal_approx(expected):
+			return true
+	_fail("The opening snapshot did not use the position shown in the formation editor")
+	return false
 
 
 func _check_match_owner() -> bool:

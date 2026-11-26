@@ -9,8 +9,8 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.Path
 import scala.util.control.NonFatal
 import services.matches.api.ApplyControlMessage
-import services.matches.logic.MatchSession
-import services.matches.objects.{MatchId, MatchPhase, PlayerId, PlayerKind, Side, SimulationTick, TeamTactics}
+import services.matches.logic.{MatchSession, MatchSimulation}
+import services.matches.objects.{MatchId, MatchPhase, Pitch, PlayerId, PlayerKind, Side, SimulationTick, TeamTactics}
 import services.matches.objects.apiTypes.MatchSelection
 import services.matches.tables.athletecard.AthleteCardTable
 import services.matches.tables.timeline.TimelineTable
@@ -40,9 +40,15 @@ final class MatchRoutes(session: MatchSession, database: Option[Path] = None, lo
         val state = session.latest.state
         val setup = state.setup
         val watch = setup.players.forall(_.kind == PlayerKind.Computer)
-        200 -> Json.obj("cards" -> cards.asJson, "teamSize" -> (setup.roster.size / 2).asJson,
+        val available = cards
+        val slots = available.filter(_.side == Side.Home).indices.map(index => MatchSimulation.startingSlot(Side.Home, index))
+        val pitch = Pitch.alpine
+        val positioning = Json.obj("slots" -> slots.asJson, "halfLength" -> pitch.halfLength.asJson,
+          "halfWidth" -> pitch.halfWidth.asJson, "goalPlaneX" -> pitch.goalPlaneX.asJson,
+          "clearance" -> MatchSimulation.startingClearance.asJson, "spacing" -> MatchSimulation.startingSpacing.asJson)
+        200 -> Json.obj("cards" -> available.asJson, "teamSize" -> (setup.roster.size / 2).asJson,
           "watch" -> watch.asJson, "active" -> (state.phase != MatchPhase.Ready).asJson,
-          "homeTactics" -> setup.tacticsFor(Side.Home).asJson)
+          "homeTactics" -> setup.tacticsFor(Side.Home).asJson, "positioning" -> positioning)
       case ("POST", "/matches/demo/start") => start(exchange)
       case ("POST", "/matches/demo/controls") =>
         val body = exchange.getRequestBody.readNBytes(8193)
@@ -90,7 +96,8 @@ final class MatchRoutes(session: MatchSession, database: Option[Path] = None, lo
       if body.isEmpty then Right(None)
       else decode[MatchSelection](new String(body, UTF_8)).left.map(_ => "Invalid match selection")
         .flatMap(choice => MatchSession.demoSetup(cards, computerOpponent || choice.watch, choice.watch,
-          choice.teamSize, Some(choice.athlete), choice.tactics.getOrElse(TeamTactics.default))).map(Some(_))
+          choice.teamSize, Some(choice.athlete), choice.tactics.getOrElse(TeamTactics.default),
+          choice.startingPositions)).map(Some(_))
     lineup.fold(detail => 400 -> error(detail),
       setup => session.start(setup).fold(rejection => 409 -> rejection.asJson, view => 200 -> view.asJson))
 

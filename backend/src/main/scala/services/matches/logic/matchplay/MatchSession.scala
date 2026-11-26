@@ -24,7 +24,8 @@ final class MatchSession private (initial: MatchState, shotSeed: Long, recordFra
     latest.state.phase match
       case MatchPhase.Ready =>
         val state = lineup.fold(latest.state)(setup => latest.state.copy(
-          setup = setup, controls = setup.assignments, athletes = formation(setup.roster)))
+          setup = setup, controls = setup.assignments,
+          athletes = formation(setup.roster, setup.startingPositions.getOrElse(Map.empty))))
         Right(append(begin(state), Nil))
       case _ => Left(ActionRejection.TemporarilyUnavailable)
   }
@@ -149,8 +150,9 @@ object MatchSession:
       _ <- Either.cond(valid, (), "A match needs equal teams and unique athlete and player assignments")
       _ <- Either.cond(durationTicks > 0, (), "Match duration must be positive")
       _ <- Either.cond(setup.balls.bludgers.isEmpty && setup.balls.snitch.isEmpty, (), "The prototype supports the Quaffle")
+      _ <- setup.startingPositions.fold[Either[String, Unit]](Right(()))(MatchSimulation.startingPositionsValid(setup.roster, _))
     yield
-      val athletes = formation(setup.roster)
+      val athletes = formation(setup.roster, setup.startingPositions.getOrElse(Map.empty))
       new MatchSession(MatchState(id, setup, setup.assignments, athletes, Score(0, 0), MatchClock(PlayTick(0), durationTicks),
         Map.empty, MatchPhase.Ready), shotSeed, recordFrame, rules)
 
@@ -164,7 +166,8 @@ object MatchSession:
       .fold(error => throw IllegalStateException(error), identity)
 
   def demoSetup(cards: List[Athlete], computerOpponent: Boolean, computerHome: Boolean,
-      teamSize: Int, selection: Option[AthleteId], homeTactics: TeamTactics = TeamTactics.default): Either[String, MatchSetup] =
+      teamSize: Int, selection: Option[AthleteId], homeTactics: TeamTactics = TeamTactics.default,
+      startingPositions: Option[Map[AthleteId, Position]] = None): Either[String, MatchSetup] =
     val home = cards.filter(_.side == Side.Home)
     if teamSize < 1 || teamSize > 2 then return Left("Team size must be 1 or 2")
     if selection.exists(id => !home.exists(_.id == id)) then return Left("Choose a home athlete card")
@@ -172,13 +175,16 @@ object MatchSession:
     val awayCards = cards.filter(_.side == Side.Away).take(teamSize)
     if homeCards.size != teamSize || awayCards.size != teamSize then return Left(s"Each side needs $teamSize athlete cards")
     val roster = homeCards.zip(awayCards).flatMap((home, away) => List(home, away))
+    val positions = startingPositions.filter(_.nonEmpty)
     val allowed = ControlKind.values.toSet - ControlKind.StrikeBludger
     val homePlayer = Player(PlayerId("home"), Side.Home, if computerHome then PlayerKind.Computer else PlayerKind.Human)
     val awayPlayer = Player(PlayerId("away"), Side.Away, if computerOpponent then PlayerKind.Computer else PlayerKind.Human)
     val players = List(homePlayer, awayPlayer) ++ roster.drop(2).map(athlete =>
       Player(PlayerId(s"support-${athlete.id.value}"), athlete.side, PlayerKind.Computer))
-    Right(MatchSetup(roster, players,
-      roster.map(_.id -> AthleteRole.Chaser).toMap,
-      players.zip(roster).map((player, athlete) => ControlAssignment(player.id, athlete.id, allowed)),
-      BallSetup(BallPhysics(.15, .6, .002, .0001), Map.empty, None),
-      Some(MatchTactics(homeTactics, TeamTactics.default))))
+    positions.fold[Either[String, Unit]](Right(()))(MatchSimulation.startingPositionsValid(roster, _)).map { _ =>
+      MatchSetup(roster, players,
+        roster.map(_.id -> AthleteRole.Chaser).toMap,
+        players.zip(roster).map((player, athlete) => ControlAssignment(player.id, athlete.id, allowed)),
+        BallSetup(BallPhysics(.15, .6, .002, .0001), Map.empty, None),
+        Some(MatchTactics(homeTactics, TeamTactics.default)), positions)
+    }
