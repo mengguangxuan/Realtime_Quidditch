@@ -10,6 +10,7 @@ object SimulationTick:
 
 enum MatchEvent:
   case QuafflePossessionChanged(outcome: QuafflePossessionOutcome)
+  case QuaffleCatchDisrupted(receiver: AthleteId)
   case QuaffleGoal(scoringSide: Side)
   case QuaffleBlocked(by: AthleteId)
   case QuafflePassed(by: AthleteId, receiver: AthleteId)

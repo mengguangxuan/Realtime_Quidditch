@@ -67,6 +67,8 @@ Godot 按球员 ID 加载从绑骨源文件导出的骑乘姿势和共用扫帚�
 
 时间轴用 `ContactAttempted` 记录进入判定窗口的冲撞或拉拽，用 `ContactResolved` 记录实际发生的身体接触。掉球、犯规和球路封堵分别有自己的事件。可结合每帧持球人和防守球员的 `Sprinting` 状态观察逼抢。
 
+接球先检查距离和相对速度。附近的对手正在逼近，或占住来球一侧时，可能让本来够得着的球接不稳。接球能力和稳定度越高，越能抵抗干扰。受压失手记为 `QuaffleCatchDisrupted`，该球员约 0.25 秒后可以再尝试，其余球员继续按正常规则争球。
+
 电脑根据持球者的位置、朝向和速度决定守门、封球环路线或逼抢。只在接触方向和相对速度适合时尝试冲撞。球出手后，电脑用真实比赛的球物理预测接下来最多两秒，结合球员自身的飞行规则判断能否赶到。能接稳的球会尝试接球，较快的球则需要实际挡在球路上。算法参考了 [Google Research Football 的球路预测](https://github.com/google-research/football/blob/master/third_party/gfootball_engine/src/onthepitch/ball.cpp) 和 [RoboCup HELIOS 的拦截表](https://github.com/helios-base/librcsc/blob/develop/rcsc/player/intercept_table.cpp)。
 
 电脑持球时按现有物理预测射门和传球路线。球环前有空间时可飞行中出手。射门路线被挡时，优先寻找能接稳球、推进或避开压迫的队友，否则带球换路线。复查时可对照传球事件、接球事件、出手速度和计分。

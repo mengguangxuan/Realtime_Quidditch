@@ -1,5 +1,6 @@
 package services.matches.logic
 
+import scala.util.Random
 import services.matches.objects.*
 
 /** Competition rules for the current Quaffle-only format. */
@@ -10,8 +11,38 @@ final case class MatchRules(attackSeconds: Int = 18):
   private[logic] val restartTicks = MatchClock.ticksPerSecond
   private[logic] val penaltyAimTicks = 8L * MatchClock.ticksPerSecond
   private[logic] val shotFlightTicks = 3L * MatchClock.ticksPerSecond
+  private[logic] val catchRetryTicks = 5
 
   private[logic] def attackFor(side: Side): MatchClock.Attack = MatchClock.Attack(side, attackTicks)
+
+  private[logic] def catchSuccessProbability(state: MatchState, receiver: Athlete, ball: BallMotion): Double =
+    val athlete = state.athletes(receiver.id)
+    val flight = athlete.flight
+    val position = flight.position.value
+    val incoming = ball.velocity.value - flight.velocity.value
+    val ballSide = Direction.from(ball.position.value - position)
+      .orElse(Direction.from(incoming * -1)).toOption
+    val pressure = state.setup.roster.iterator.filter(_.side != receiver.side).map { opponent =>
+      val defender = state.athletes(opponent.id).flight
+      val offset = defender.position.value - position
+      val distance = offset.length
+      if distance >= 3.4 then 0.0
+      else
+        val towardDefender = Direction.from(offset).map(_.value).getOrElse(flight.facing.value)
+        val closing = -(defender.velocity.value - flight.velocity.value).dot(towardDefender)
+        val approach = FlightRules.clamp(closing / 7, 0, 1)
+        val inReceivingLane = incoming.length >= 3 && ballSide.exists(_.value.dot(towardDefender) >= .55)
+        val proximity = FlightRules.clamp((3.4 - distance) / 2.4, 0, 1)
+        proximity * math.max(approach, if inReceivingLane then .8 else 0)
+    }.maxOption.getOrElse(0.0)
+    val control = (receiver.ratings.ballControl.catching.value * .6 + athlete.stability.value * .4) / 100
+    1 - pressure * (.72 - .37 * control)
+
+  private[logic] def securesCatch(state: MatchState, receiver: Athlete, ball: BallMotion,
+      seed: Long, tick: Long): Boolean =
+    val probability = catchSuccessProbability(state, receiver, ball)
+    probability == 1 || new Random(seed ^ (tick * 0x9e3779b97f4a7c15L) ^
+      (receiver.id.value.toLong * 0xbf58476d1ce4e5b9L)).nextDouble() < probability
 
   private[logic] def foulRestart(side: Side, foul: Foul, count: Int): Restart =
     if foul.deniedClearChance || count >= 2 then Restart.PenaltyThrow(side, foul)

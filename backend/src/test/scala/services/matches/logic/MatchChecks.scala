@@ -121,6 +121,7 @@ object MatchChecks:
     checkHistory()
     checkRiderMovement(demo)
     checkShotsAndBlocks(demo)
+    checkCatchPressure(demo)
     checkAttackPlanning()
     checkCompetitionRules(demo)
     checkDefensePlanning(demo)
@@ -351,6 +352,55 @@ object MatchChecks:
     val step = MatchSimulation.advance(state, live, Vector.empty, MatchSimulation.Inputs(), seed)
     assert(step.events == List(MatchEvent.QuaffleBlocked(away.id)))
     assert(step.state.score == state.score)
+
+  private def checkCatchPressure(demo: MatchState): Unit =
+    val receiver = demo.setup.roster.find(_.side == Side.Home).get
+    val defender = demo.setup.roster.find(_.side == Side.Away).get
+    val rules = MatchRules.standard
+    val ball = QuaffleRules.free(Vec3(0, .5, 9), Vec3(0, -6, 0))
+    val balls = MatchBalls(ball, SpecialBalls(Map.empty, None))
+    val receiverState = demo.athletes(receiver.id).copy(
+      flight = FlightState(Position(Vec3(0, 0, 9)), Velocity(Vec3.zero), Direction.east))
+
+    def scene(position: Vec3, speed: Vec3 = Vec3.zero): MatchState =
+      val opponent = demo.athletes(defender.id).copy(
+        flight = FlightState(Position(position), Velocity(speed), Direction.west))
+      demo.copy(athletes = Map(receiver.id -> receiverState, defender.id -> opponent),
+        phase = MatchPhase.InPlay(balls), attackClock = None)
+
+    def chance(state: MatchState, athlete: Athlete = receiver): Double =
+      rules.catchSuccessProbability(state, athlete, ball.motion)
+
+    val unopposed = scene(Vec3(0, 8, 9))
+    val nearbyBehind = scene(Vec3(-1.6, 0, 9))
+    val enteringLane = scene(Vec3(-1.6, 0, 9), Vec3(7, 0, 0))
+    val blockingLane = scene(Vec3(0, 1.6, 9))
+    assert(chance(unopposed) == 1 && chance(nearbyBehind) == 1)
+    assert(chance(enteringLane) < 1 && chance(blockingLane) < 1)
+    val unsteady = enteringLane.copy(athletes = enteringLane.athletes.updated(receiver.id,
+      receiverState.copy(stability = Stability(30))))
+    val weak = receiver.copy(ratings = receiver.ratings.copy(
+      ballControl = receiver.ratings.ballControl.copy(catching = Rating(20))))
+    assert(chance(unsteady) < chance(enteringLane) && chance(enteringLane, weak) < chance(enteringLane))
+
+    val nextTick = enteringLane.clock.elapsed.value + 1
+    val missSeed = Iterator.from(0).map(_.toLong)
+      .find(seed => !rules.securesCatch(enteringLane, receiver, ball.motion, seed, nextTick)).get
+    val attempt = receiver.id -> Control.Catch(CatchTarget.Quaffle)
+    val inputs = MatchSimulation.Inputs()
+    val miss = MatchSimulation.advance(enteringLane, balls, Vector(attempt, attempt), inputs, missSeed)
+    assert(miss == MatchSimulation.advance(enteringLane, balls, Vector(attempt), inputs, missSeed))
+    val disrupted = MatchEvent.QuaffleCatchDisrupted(receiver.id)
+    val caught = MatchEvent.QuafflePossessionChanged(QuafflePossessionOutcome.Caught(receiver.id))
+    assert(miss.events.contains(disrupted) && !miss.events.contains(caught))
+    val frame = TimelineFrame(SimulationTick(nextTick), miss.state, miss.events)
+    assert(frame.asJson.as[TimelineFrame] == Right(frame))
+    assert(miss.state.athletes(receiver.id).pose.flatMap(_.ballAction).exists(_.kind == BallAction.Reaching))
+    val tooSoon = MatchSimulation.advance(unopposed.copy(clock = miss.state.clock), balls, Vector(attempt),
+      miss.inputs, missSeed)
+    assert(!tooSoon.events.contains(caught) && !tooSoon.events.contains(disrupted))
+    val ready = unopposed.copy(clock = unopposed.clock.copy(elapsed = PlayTick(nextTick + rules.catchRetryTicks - 1)))
+    assert(MatchSimulation.advance(ready, balls, Vector(attempt), miss.inputs, missSeed).events.contains(caught))
 
   private def checkAttackPlanning(): Unit =
     val state = MatchSession.demo(cards, teamSize = 2).latest.state

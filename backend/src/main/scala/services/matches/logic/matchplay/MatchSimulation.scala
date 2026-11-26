@@ -20,7 +20,8 @@ private[matches] object MatchSimulation:
       shots: Long = 0,
       passTarget: Option[(AthleteId, Long)] = None,
       shotUntil: Option[Long] = None,
-      primaryDefender: Option[AthleteId] = None
+      primaryDefender: Option[AthleteId] = None,
+      catchRetryAt: Map[AthleteId, Long] = Map.empty
   )
 
   final case class Step(state: MatchState, events: List[MatchEvent], inputs: Inputs)
@@ -140,6 +141,7 @@ private[matches] object MatchSimulation:
     var shots = previous.shots
     var passTarget = previous.passTarget.filter(_._2 >= step)
     var shotUntil = previous.shotUntil.filter(_ >= step)
+    var catchRetryAt = previous.catchRetryAt.filter(_._2 > step)
     var attackClock = start.attackClock
     var thrower = Option.empty[AthleteId]
     val roster = state.setup.roster
@@ -160,14 +162,21 @@ private[matches] object MatchSimulation:
           val mode = if active then MovementMode.Bracing else MovementMode.Normal
           state = state.copy(athletes = state.athletes.updated(id, entry.copy(movement = mode)))
         case Control.Catch(CatchTarget.Quaffle) =>
-          if catchQuaffle(state, athlete, balls.quaffle) then
-            passTarget = None
-            shotUntil = None
-            ownBall()
-            possession(QuaffleState.HeldBy(id), QuafflePossessionOutcome.Caught(id))
-            state = AthleteMotion.ballAction(state, id, BallAction.Securing)
-          else if balls.quaffle.isInstanceOf[QuaffleState.Free] then
-            state = AthleteMotion.ballAction(state, id, BallAction.Reaching)
+          balls.quaffle match
+            case loose @ QuaffleState.Free(motion) if !catchRetryAt.contains(id) =>
+              val inReach = catchQuaffle(state, athlete, loose)
+              if inReach && rules.securesCatch(state, athlete, motion, shotSeed, step) then
+                passTarget = None
+                shotUntil = None
+                ownBall()
+                possession(QuaffleState.HeldBy(id), QuafflePossessionOutcome.Caught(id))
+                state = AthleteMotion.ballAction(state, id, BallAction.Securing)
+              else
+                state = AthleteMotion.ballAction(state, id, BallAction.Reaching)
+                if inReach then
+                  catchRetryAt = catchRetryAt.updated(id, step + rules.catchRetryTicks)
+                  events += MatchEvent.QuaffleCatchDisrupted(id)
+            case _ => ()
         case Control.Shoot(aim) =>
           if balls.quaffle != QuaffleState.HeldBy(id) then reject(ActionRejection.NotBallHolder)
           else if attackClock.exists(_.remainingTicks == 0) then reject(ActionRejection.TemporarilyUnavailable)
@@ -269,7 +278,7 @@ private[matches] object MatchSimulation:
       case MatchPhase.InPlay(_) => remainingAttack
       case _ => None
     Step(state.copy(clock = state.clock.copy(elapsed = elapsed), attackClock = liveAttack), events.result(),
-      Inputs(flightInputs, touching.result(), contacts, shots, passTarget, shotUntil, previous.primaryDefender))
+      Inputs(flightInputs, touching.result(), contacts, shots, passTarget, shotUntil, previous.primaryDefender, catchRetryAt))
 
   private def contactInitiative(state: MatchState, first: Athlete, second: Athlete, relative: Vec3,
       contacts: Map[AthleteId, ContactAttempt]): (Athlete, Athlete, ContactKind) =
