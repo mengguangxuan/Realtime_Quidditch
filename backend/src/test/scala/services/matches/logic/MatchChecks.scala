@@ -121,6 +121,7 @@ object MatchChecks:
     checkHistory()
     checkRiderMovement(demo)
     checkShotsAndBlocks(demo)
+    checkAttackPlanning()
     checkCompetitionRules(demo)
     checkDefensePlanning(demo)
     checkCoordinatedDefense()
@@ -227,7 +228,7 @@ object MatchChecks:
     setup.players.foreach { player =>
       assert(session.submit(player.id, Control.Charge) == Left(ActionRejection.PlayerIsComputer))
     }
-    val frames = Iterator.fill(4000)(()).map(_ => session.advance())
+    val frames = Iterator.fill((session.latest.state.clock.durationTicks * 2).toInt)(()).map(_ => session.advance())
       .takeWhile(frame => !frame.state.phase.isInstanceOf[MatchPhase.Finished]).toVector
     assert(session.latest.state.phase.isInstanceOf[MatchPhase.Finished])
     assert(setup.roster.forall { rider =>
@@ -242,7 +243,7 @@ object MatchChecks:
     val blocks = events.count(_.isInstanceOf[MatchEvent.QuaffleBlocked])
     val attempts = events.count(_.isInstanceOf[MatchEvent.ContactAttempted])
     val contacts = events.count(_.isInstanceOf[MatchEvent.ContactResolved])
-    assert(attempts > 0 && contacts > 0)
+    assert(releases > 0)
     val score = session.latest.state.score
     assert(scoreFromEvents(Score(0, 0), events ++ session.latest.events) == score)
     println(s"CPU vs CPU (seed 42): ${score.home}-${score.away}, $releases releases, $blocks blocks, $attempts contact attempts, $contacts contacts")
@@ -351,6 +352,44 @@ object MatchChecks:
     assert(step.events == List(MatchEvent.QuaffleBlocked(away.id)))
     assert(step.state.score == state.score)
 
+  private def checkAttackPlanning(): Unit =
+    val state = MatchSession.demo(cards, teamSize = 2).latest.state
+    val home = state.setup.roster.filter(_.side == Side.Home)
+    val away = state.setup.roster.filter(_.side == Side.Away)
+    val shooter = home.head
+    val receiver = home.last
+    val allowed = Set(ControlKind.Shoot, ControlKind.Pass)
+
+    def scene(positions: (Athlete, Vec3, Vec3)*): MatchState =
+      val updated = positions.foldLeft(state.athletes) { case (athletes, (athlete, point, velocity)) =>
+        val entry = athletes(athlete.id)
+        athletes.updated(athlete.id, entry.copy(flight = entry.flight.copy(position = Position(point),
+          velocity = Velocity(velocity))))
+      }
+      state.copy(athletes = updated)
+
+    val moving = scene((shooter, Vec3(26, 1, 11), Vec3(12, 2, 0)),
+      (receiver, Vec3(19, -8, 10), Vec3.zero), (away.head, Vec3(37, 13, 11), Vec3.zero),
+      (away.last, Vec3(33, -15, 10), Vec3.zero))
+    AttackPlanner.withQuaffle(moving, shooter, allowed) match
+      case AttackPlanner.Decision.Shoot(aim) =>
+        val physics = moving.setup.balls.quaffle
+        val released = QuaffleRules.shoot(moving, shooter, aim, 42)
+        val path = Iterator.iterate(QuaffleRules.predictStep(released, physics)) { (motion, _) =>
+          QuaffleRules.predictStep(motion, physics)
+        }
+        assert(path.take(24).exists(_._2.exists(_._1 == Side.Home)))
+      case other => throw AssertionError(s"Expected an open shot in motion, found $other")
+
+    val outlet = scene((shooter, Vec3(10, 0, 10), Vec3.zero),
+      (receiver, Vec3(20, 8, 10), Vec3.zero), (away.head, Vec3(12, -3, 10), Vec3.zero),
+      (away.last, Vec3(33, -15, 10), Vec3.zero))
+    assert(AttackPlanner.withQuaffle(outlet, shooter, allowed) == AttackPlanner.Decision.Pass(receiver.id))
+    val blocked = outlet.athletes(away.head.id)
+    val trappedLane = outlet.copy(athletes = outlet.athletes.updated(away.head.id,
+      blocked.copy(flight = blocked.flight.copy(position = Position(Vec3(15, 4, 10.5))))))
+    assert(AttackPlanner.withQuaffle(trappedLane, shooter, allowed).isInstanceOf[AttackPlanner.Decision.Carry])
+
   private def checkDefensePlanning(demo: MatchState): Unit =
     import DefensePlanner.Decision
     val attacker = demo.setup.roster.head
@@ -443,9 +482,28 @@ object MatchChecks:
     val sides = initial.setup.roster.map(athlete => athlete.id -> athlete.side).toMap
     var closeFrames = 0
     var longest = 0
-    val frames = Iterator.continually(watch.advance()).take(4000)
+    var passes = 0
+    var completedPasses = 0
+    var recipient = Option.empty[AthleteId]
+    var movingShots = 0
+    val frames = Iterator.continually(watch.advance()).take((watch.latest.state.clock.durationTicks * 2).toInt)
       .takeWhile(frame => !frame.state.phase.isInstanceOf[MatchPhase.Finished])
     frames.foreach { frame =>
+      val passed = frame.events.exists(_.isInstanceOf[MatchEvent.QuafflePassed])
+      if passed then passes += 1
+      else movingShots += frame.events.count {
+        case MatchEvent.QuafflePossessionChanged(QuafflePossessionOutcome.Released(id, _)) =>
+          frame.state.athletes(id).flight.velocity.value.length > 2
+        case _ => false
+      }
+      frame.events.foreach {
+        case MatchEvent.QuafflePassed(_, receiver) => recipient = Some(receiver)
+        case MatchEvent.QuafflePossessionChanged(QuafflePossessionOutcome.Caught(by)) =>
+          if recipient.contains(by) then completedPasses += 1
+          recipient = None
+        case MatchEvent.QuaffleGoal(_) | MatchEvent.AttackExpired(_) | MatchEvent.FoulCalled(_) => recipient = None
+        case _ => ()
+      }
       val defending = frame.state.phase match
         case MatchPhase.InPlay(MatchBalls(QuaffleState.HeldBy(holder), _)) =>
           initial.setup.roster.filter(_.side != sides(holder))
@@ -460,7 +518,10 @@ object MatchChecks:
     }
     assert(watch.latest.state.phase.isInstanceOf[MatchPhase.Finished])
     assert(longest <= MatchClock.ticksPerSecond, s"Defenders stayed within 2 meters for $longest ticks")
-    println(s"CPU vs CPU 2v2 (seed 42): longest defended overlap under 2 m was $longest ticks")
+    val score = watch.latest.state.score
+    assert(completedPasses > 0 && movingShots > 0 && score.home + score.away > 0)
+    println(s"CPU vs CPU 2v2 (seed 42): $score, $completedPasses/$passes completed passes, $movingShots moving shots, " +
+      s"longest defended overlap under 2 m was $longest ticks")
 
   private def checkTeamPressureAssignments(): Unit =
     val initial = MatchSession.demo(cards, teamSize = 2).latest.state

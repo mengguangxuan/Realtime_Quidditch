@@ -69,11 +69,12 @@ Godot 按球员 ID 加载从绑骨源文件导出的骑乘姿势和共用扫帚�
 
 电脑根据持球者的位置、朝向和速度决定守门、封球环路线或逼抢。只在接触方向和相对速度适合时尝试冲撞。球出手后，电脑用真实比赛的球物理预测接下来最多两秒，结合球员自身的飞行规则判断能否赶到。能接稳的球会尝试接球，较快的球则需要实际挡在球路上。算法参考了 [Google Research Football 的球路预测](https://github.com/google-research/football/blob/master/third_party/gfootball_engine/src/onthepitch/ball.cpp) 和 [RoboCup HELIOS 的拦截表](https://github.com/helios-base/librcsc/blob/develop/rcsc/player/intercept_table.cpp)。
 
+电脑持球时按现有物理预测射门和传球路线。球环前有空间时可飞行中出手。射门路线被挡时，优先寻找能接稳球、推进或避开压迫的队友，否则带球换路线。复查时可对照传球事件、接球事件、出手速度和计分。
+
 运行 `sbt "Test / runMain services.matches.logic.MatchChecks"` 验证接球、射门、计分和时间轴。
 
 ## 观战发现（待处理）
 
 - **防守方有身位优势时过早回撤。** 防守球员已经占住持球者通往球门的路线，仍经常转身回去守门。后续验收时要能看到防守者保持身位，在能合法接触时主动上对抗，尝试打断进攻。
-- **进攻方出手时机单一。** 电脑通常飞到固定的射门区域，减速接近静止后才出手。后续验收要覆盖防守者离开球门线路时的远射，以及保持飞行速度时的射门。
 
 复查时使用现有电脑对战模式，通过比赛 ID 和模拟帧号对照球员位置、速度、持球状态和对抗或出手事件。
