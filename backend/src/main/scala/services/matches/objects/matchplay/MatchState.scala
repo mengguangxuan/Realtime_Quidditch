@@ -35,8 +35,11 @@ final case class MatchSetup(
   players: List[Player],
   roles: Map[AthleteId, AthleteRole],
   assignments: List[ControlAssignment],
-  balls: BallSetup
-)
+  balls: BallSetup,
+  tactics: Option[MatchTactics] = None
+):
+  def tacticsFor(side: Side): TeamTactics =
+    tactics.fold(TeamTactics.default)(_.forSide(side))
 
 object MatchSetup:
   given Codec.AsObject[MatchSetup] = deriveCodec[MatchSetup]

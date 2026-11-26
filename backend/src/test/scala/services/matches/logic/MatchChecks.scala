@@ -123,6 +123,7 @@ object MatchChecks:
     checkShotsAndBlocks(demo)
     checkCompetitionRules(demo)
     checkDefensePlanning(demo)
+    checkTeamTactics()
     val solo = MatchSession.demo(cards, computerOpponent = true, shotSeed = 42)
     assert(solo.start().isRight)
     assert(solo.submit(PlayerId("away"), Control.Charge) == Left(ActionRejection.PlayerIsComputer))
@@ -388,6 +389,42 @@ object MatchChecks:
     })
     assert(saved.exists(_.state.score == initial.score))
 
+  private def checkTeamTactics(): Unit =
+    val setup = MatchSession.demo(cards, teamSize = 2).latest.state.setup
+    val before = setup.asJson.mapObject(_.remove("tactics")).as[MatchSetup].toOption.get
+    assert(Side.values.forall(side => before.tacticsFor(side) == TeamTactics.default))
+    assert(decode[TeamTactics]("""{"attackSupport":"Unknown","defense":"Cover"}""").isLeft)
+    val session = MatchSession.demo(cards, teamSize = 2, shotSeed = 42)
+    val initial = session.latest.state
+    val home = initial.controls.find(_.player == PlayerId("home")).get.athlete
+    val away = initial.controls.find(_.player == PlayerId("away")).get.athlete
+    val teammate = initial.controls.find(assignment => assignment.athlete != home &&
+      setup.roster.exists(athlete => athlete.id == assignment.athlete && athlete.side == Side.Home)).get
+
+    def after(tactics: TeamTactics, holder: AthleteId, at: Vec3, ticks: Int): Vec3 =
+      val balls = MatchBalls(QuaffleState.HeldBy(holder), SpecialBalls(Map.empty, None))
+      val arranged = initial.athletes
+        .updated(home, initial.athletes(home).copy(flight =
+          initial.athletes(home).flight.copy(position = Position(Vec3(-33, 12, 8)))))
+        .updated(holder, initial.athletes(holder).copy(flight =
+          initial.athletes(holder).flight.copy(position = Position(at))))
+        .updated(teammate.athlete, initial.athletes(teammate.athlete).copy(flight =
+          initial.athletes(teammate.athlete).flight.copy(position = Position(Vec3(-25, 0, 10)))))
+      val configured = setup.copy(tactics = Some(MatchTactics(tactics, TeamTactics.default)))
+      val start = initial.copy(setup = configured, phase = MatchPhase.InPlay(balls), athletes = arranged)
+      val end = (1 to ticks).foldLeft(MatchSimulation.Step(start, Nil, MatchSimulation.Inputs())) { (step, _) =>
+        val controls = ComputerPilot.controls(step.state, balls, teammate).map(teammate.athlete -> _).toVector
+        MatchSimulation.advance(step.state, balls, controls, step.inputs, 42)
+      }
+      end.state.athletes(teammate.athlete).flight.position.value
+
+    val nearby = after(TeamTactics.default.copy(attackSupport = AttackSupport.Nearby), home, Vec3(0, 0, 10), 45)
+    val wide = after(TeamTactics.default, home, Vec3(0, 0, 10), 45)
+    assert(wide.y > nearby.y + 2)
+    val pressure = after(TeamTactics.default, away, Vec3(-20, 0, 10), 12)
+    val cover = after(TeamTactics.default.copy(defense = DefensiveApproach.Cover), away, Vec3(-20, 0, 10), 12)
+    assert(pressure.x > -25 && cover.x < -25)
+
   private def checkHistory(): Unit =
     val directory = Files.createTempDirectory("quidditch-history-")
     val path = directory.resolve("matches.sqlite3")
@@ -403,11 +440,15 @@ object MatchChecks:
           yield
             val session = MatchSession.demo(loaded, id = id,
               recordFrame = frame => TimelineTable.insert(connection, frame).unsafeRunSync())
-            assert(session.start().isRight)
+            val tactics = TeamTactics(AttackSupport.Nearby, DefensiveApproach.Cover)
+            val setup = MatchSession.demoSetup(loaded, false, false, 1, None, tactics).toOption.get
+            assert(session.start(Some(setup)).isRight)
             assert(session.submit(PlayerId("home"), Control.Charge).isRight)
             session.advance()
         }.unsafeRunSync()
       val oldFrame = runMatch(archived)
+      assert(oldFrame.state.setup.tacticsFor(Side.Home) == TeamTactics(AttackSupport.Nearby, DefensiveApproach.Cover))
+      assert(oldFrame.state.setup.tacticsFor(Side.Away) == TeamTactics.default)
       Database.connect(path).use { connection =>
         IO.blocking {
           Using.resource(connection.createStatement()) { statement =>

@@ -29,23 +29,25 @@ private[matches] object DefensePlanner:
   private def ownGoal(athlete: Athlete): Double =
     if athlete.side == Side.Home then -pitch.goalPlaneX else pitch.goalPlaneX
 
-  def againstCarrier(state: MatchState, athlete: Athlete, carrier: AthleteId): Decision =
+  def againstCarrier(state: MatchState, athlete: Athlete, carrier: AthleteId,
+      approach: DefensiveApproach = DefensiveApproach.Pressure): Decision =
     val defender = state.athletes(athlete.id).flight
     val opponent = state.athletes(carrier).flight
     val point = opponent.position.value
     val goalX = ownGoal(athlete)
     val goalward = math.signum(goalX)
     val advanced = (point.x - goalX) * -goalward
-    val approach = point - defender.position.value
-    val distance = approach.length
-    val direction = Direction.from(approach).getOrElse(defender.facing).value
+    val toCarrier = point - defender.position.value
+    val distance = toCarrier.length
+    val direction = Direction.from(toCarrier).getOrElse(defender.facing).value
     val closing = (defender.velocity.value - opponent.velocity.value).dot(direction)
     val impulse = (closing + 2) * (.8 + athlete.ratings.physical.strength.value * .006)
     val legalContact = direction.dot(opponent.facing.value) < .55 && closing > 2 &&
       impulse < 23 && distance <= math.min(3.6, 1.30 + closing * .20)
     val prediction = contain(point + opponent.velocity.value * .45, 1.5)
-    if legalContact then Decision.Challenge(carrier, Position(prediction))
-    else if advanced >= 15 && distance <= 11 && approach.x * goalward <= 2.5 then
+    val pressure = approach == DefensiveApproach.Pressure
+    if pressure && legalContact then Decision.Challenge(carrier, Position(prediction))
+    else if pressure && advanced >= 15 && distance <= 11 && toCarrier.x * goalward <= 2.5 then
       Decision.Press(carrier, Position(contain(prediction + Vec3(goalward * 1.8, 0, 0), 1.5)))
     else if advanced > 27 || advanced <= 0 then
       Decision.HoldGoal(Position(Vec3(goalX - goalward * 4, 0, 10)))

@@ -8,9 +8,10 @@ import io.circe.syntax.*
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.Path
 import scala.util.control.NonFatal
-import services.matches.api.{ApplyControlMessage, MatchSelection}
+import services.matches.api.ApplyControlMessage
 import services.matches.logic.MatchSession
-import services.matches.objects.{MatchId, MatchPhase, PlayerId, PlayerKind, SimulationTick}
+import services.matches.objects.{MatchId, MatchPhase, PlayerId, PlayerKind, Side, SimulationTick, TeamTactics}
+import services.matches.objects.apiTypes.MatchSelection
 import services.matches.tables.athletecard.AthleteCardTable
 import services.matches.tables.timeline.TimelineTable
 import services.system.Database
@@ -40,7 +41,8 @@ final class MatchRoutes(session: MatchSession, database: Option[Path] = None, lo
         val setup = state.setup
         val watch = setup.players.forall(_.kind == PlayerKind.Computer)
         200 -> Json.obj("cards" -> cards.asJson, "teamSize" -> (setup.roster.size / 2).asJson,
-          "watch" -> watch.asJson, "active" -> (state.phase != MatchPhase.Ready).asJson)
+          "watch" -> watch.asJson, "active" -> (state.phase != MatchPhase.Ready).asJson,
+          "homeTactics" -> setup.tacticsFor(Side.Home).asJson)
       case ("POST", "/matches/demo/start") => start(exchange)
       case ("POST", "/matches/demo/controls") =>
         val body = exchange.getRequestBody.readNBytes(8193)
@@ -88,7 +90,7 @@ final class MatchRoutes(session: MatchSession, database: Option[Path] = None, lo
       if body.isEmpty then Right(None)
       else decode[MatchSelection](new String(body, UTF_8)).left.map(_ => "Invalid match selection")
         .flatMap(choice => MatchSession.demoSetup(cards, computerOpponent || choice.watch, choice.watch,
-          choice.teamSize, Some(choice.athlete))).map(Some(_))
+          choice.teamSize, Some(choice.athlete), choice.tactics.getOrElse(TeamTactics.default))).map(Some(_))
     lineup.fold(detail => 400 -> error(detail),
       setup => session.start(setup).fold(rejection => 409 -> rejection.asJson, view => 200 -> view.asJson))
 

@@ -52,6 +52,16 @@ func _run() -> void:
 			if int(card["id"]) == 3:
 				lobby._choose(card)
 				selected = 3
+	var team_play: bool = lobby._modes.selected % 2 == 1
+	if lobby._tactics_panel.visible != team_play:
+		_fail("Tactics should be shown for 2v2")
+		return
+	if lobby._play.get_global_rect().end.y > root.get_visible_rect().end.y:
+		_fail("The lobby start button does not fit in the viewport")
+		return
+	if team_play:
+		lobby._attack_support.select(1)
+		lobby._defense.select(1)
 	var lobby_id: int = lobby.get_instance_id()
 	lobby._start()
 	if not await _until(func() -> bool: return current_scene.get_instance_id() != lobby_id, 6.0):
@@ -78,6 +88,12 @@ func _run() -> void:
 		return
 	if int(game._selected_id) != selected:
 		_fail("The server did not assign the selected athlete card")
+		return
+	var tactics: Dictionary = game.current_state["setup"]["tactics"]
+	var home_tactics: Dictionary = {"attackSupport": "Nearby", "defense": "Cover"} if team_play else {
+		"attackSupport": "Wide", "defense": "Pressure"}
+	if tactics["home"] != home_tactics or tactics["away"] != {"attackSupport": "Wide", "defense": "Pressure"}:
+		_fail("The server did not save the selected tactics for the correct side")
 		return
 	for id: String in game._rider_visuals:
 		var model: Node3D = game._rider_visuals[id].get_child(0)
@@ -174,6 +190,13 @@ func _check_match_owner() -> bool:
 	if response[1] != 403:
 		request.queue_free()
 		_fail("The other account could control the active match")
+		return false
+	request.request(origin + "/matches/demo/start", headers, HTTPClient.METHOD_POST, JSON.stringify({
+		"athlete": 1, "teamSize": 2, "watch": false, "tactics": {"attackSupport": "Wide", "defense": "Pressure"}}))
+	response = await request.request_completed
+	if response[1] != 403:
+		request.queue_free()
+		_fail("The other account could replace the active match tactics")
 		return false
 	request.request(origin + "/auth/logout", headers, HTTPClient.METHOD_POST)
 	response = await request.request_completed

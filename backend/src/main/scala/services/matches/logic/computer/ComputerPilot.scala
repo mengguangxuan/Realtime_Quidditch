@@ -16,6 +16,7 @@ private[matches] object ComputerPilot:
     val position = flight.position.value
     val velocity = flight.velocity.value
     val sign = if athlete.side == Side.Home then 1 else -1
+    val tactics = state.setup.tacticsFor(athlete.side)
 
     def move(target: Vec3, sprint: Boolean = false): Control =
       Control.Fly(DefensePlanner.flightTo(flight, target, sprint))
@@ -25,8 +26,11 @@ private[matches] object ComputerPilot:
       team.minBy(mate => (state.athletes(mate.id).flight.position.value - point).length).id
 
     def support(point: Vec3): List[Control] =
-      val lane = if point.y > 0 then -9 else 9
-      List(move(FlightRules.contain(Vec3(point.x + sign * 6, lane, math.max(4, point.z)), 1.5)))
+      val inward = if point.y > 0 then -1 else 1
+      val target = tactics.attackSupport match
+        case AttackSupport.Nearby => Vec3(point.x + sign * 3, point.y + inward * 4, math.max(4, point.z))
+        case AttackSupport.Wide => Vec3(point.x + sign * 6, inward * 9, math.max(4, point.z))
+      List(move(FlightRules.contain(target, 1.5)))
 
     import DefensePlanner.{Decision, InterceptMethod}
     def defend(decision: Decision): List[Control] = decision match
@@ -61,6 +65,7 @@ private[matches] object ComputerPilot:
       case QuaffleState.HeldBy(id) =>
         val carrier = state.athletes(id).flight.position.value
         if team.exists(_.id == id) then support(carrier)
-        else if nearest(carrier) == athlete.id then defend(DefensePlanner.againstCarrier(state, athlete, id))
+        else if nearest(carrier) == athlete.id then
+          defend(DefensePlanner.againstCarrier(state, athlete, id, tactics.defense))
         else List(move(Vec3(-sign * 39, if carrier.y > 0 then 4 else -4, 10)))
     decisions.filter(control => assignment.allowedControls.contains(control.kind))

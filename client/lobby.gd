@@ -8,6 +8,9 @@ const INK := Color("#f1eee0")
 var token := ""
 var _request := HTTPRequest.new()
 var _modes := OptionButton.new()
+var _tactics_panel := HBoxContainer.new()
+var _attack_support := OptionButton.new()
+var _defense := OptionButton.new()
 var _cards_grid := HBoxContainer.new()
 var _opponents_grid := HBoxContainer.new()
 var _detail := Label.new()
@@ -35,7 +38,7 @@ func _ready() -> void:
 	layout.offset_bottom = -46
 	var form := VBoxContainer.new()
 	form.custom_minimum_size.x = 510
-	form.add_theme_constant_override("separation", 16)
+	form.add_theme_constant_override("separation", 12)
 	layout.add_child(form)
 	_label(form, "比赛准备", 35, GOLD)
 	_label(form, "对战模式", 18, INK)
@@ -43,11 +46,17 @@ func _ready() -> void:
 		_modes.add_item(option)
 	_modes.custom_minimum_size.y = 46
 	form.add_child(_modes)
+	_tactics_panel.add_theme_constant_override("separation", 12)
+	form.add_child(_tactics_panel)
+	_add_tactics_option(_attack_support, "格兰芬多进攻接应", ["拉开接应", "近距离接应"], ["Wide", "Nearby"])
+	_add_tactics_option(_defense, "格兰芬多防守", ["上前逼抢", "回撤保护"], ["Pressure", "Cover"])
+	_modes.item_selected.connect(_update_tactics_visibility)
+	_update_tactics_visibility(_modes.selected)
 	_label(form, "选择格兰芬多首发", 18, INK)
 	form.add_child(_cards_grid)
 	_label(form, "查看斯莱特林球员", 16, INK)
 	form.add_child(_opponents_grid)
-	_detail.custom_minimum_size.y = 142
+	_detail.custom_minimum_size.y = 112
 	_detail.add_theme_constant_override("line_spacing", 6)
 	form.add_child(_detail)
 	_play.text = "开始比赛"
@@ -62,6 +71,29 @@ func _ready() -> void:
 	_request.timeout = 8
 	_request.request_completed.connect(_completed)
 	_request.request(MatchApi.backend_origin() + "/matches/lobby", _headers())
+
+
+func _add_tactics_option(option: OptionButton, caption: String, labels: Array[String], values: Array[String]) -> void:
+	var column := VBoxContainer.new()
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tactics_panel.add_child(column)
+	_label(column, caption, 16, INK)
+	option.custom_minimum_size.y = 36
+	for index in labels.size():
+		option.add_item(labels[index])
+		option.set_item_metadata(index, values[index])
+	column.add_child(option)
+
+
+func _update_tactics_visibility(mode: int) -> void:
+	_tactics_panel.visible = mode % 2 == 1
+
+
+func _select_tactic(option: OptionButton, value: String) -> void:
+	for index in option.item_count:
+		if option.get_item_metadata(index) == value:
+			option.select(index)
+			return
 
 
 func _label(parent: Control, caption: String, size: int, color: Color) -> void:
@@ -156,6 +188,11 @@ func _start() -> void:
 	_status.text = "正在开赛…"
 	var payload := {"athlete": int(_chosen["id"]), "teamSize": _modes.selected % 2 + 1,
 		"watch": _modes.selected >= 2}
+	if _tactics_panel.visible:
+		payload["tactics"] = {
+			"attackSupport": _attack_support.get_item_metadata(_attack_support.selected),
+			"defense": _defense.get_item_metadata(_defense.selected)
+		}
 	if _request.request(MatchApi.backend_origin() + "/matches/demo/start", _headers(),
 			HTTPClient.METHOD_POST, JSON.stringify(payload)) != OK:
 		_starting = false
@@ -181,12 +218,18 @@ func _completed(result: int, code: int, _response_headers: PackedStringArray, bo
 		return
 	_cards = data["cards"]
 	_modes.select(int(data["teamSize"]) - 1 + (2 if data["watch"] else 0))
+	_update_tactics_visibility(_modes.selected)
+	var tactics: Dictionary = data.get("homeTactics", {})
+	_select_tactic(_attack_support, tactics.get("attackSupport", "Wide"))
+	_select_tactic(_defense, tactics.get("defense", "Pressure"))
 	_show_cards()
 	_active_match = data["active"]
 	if _active_match:
 		_play.text = "返回赛场"
 		_play.disabled = false
 		_modes.disabled = true
+		_attack_support.disabled = true
+		_defense.disabled = true
 		_cards_grid.hide()
 		_status.text = "本场阵容已确定。"
 	else:

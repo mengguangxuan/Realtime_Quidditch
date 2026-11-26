@@ -6,6 +6,8 @@
 
 每队人数由启动参数设置，原型支持 1 或 2 人，默认 1 人。例如 `sbt "run 8080 cpu random 2"`。开赛和控制继续走 `/matches/demo/start` 和 `/matches/demo/controls`。控制消息支持 `{"Pass":{"receiver":3}}` 和 `{"SwitchAthlete":{"athlete":3}}`，ID 来自当前阵容。切换时人类控制者和队友 AI 交换球员。
 
+2 对 2 大厅可为格兰芬多选择进攻接应和防守战术，观战同样生效。`POST /matches/demo/start` 可随阵容提交 `"tactics":{"attackSupport":"Nearby","defense":"Cover"}`。进攻支持 `Nearby`（近距离接应）或 `Wide`（拉开接应），防守支持 `Pressure`（优先逼抢）或 `Cover`（优先回撤保护）。默认战术是 `Wide` 和 `Pressure`，斯莱特林使用默认战术。双方开赛时使用的战术随比赛快照保存。
+
 每次启动分配独立的比赛 ID，并将第 0 帧和后续模拟帧立即写入本地 SQLite。数据库默认位于 `backend/data/matches.sqlite3`，可通过 `QUIDDITCH_DB_PATH` 指定路径。每帧包含完整的比赛状态和当步事件。服务重启会开新局，旧帧仍可通过历史接口查询。
 
 | 方法 | 路径 | 用途 |

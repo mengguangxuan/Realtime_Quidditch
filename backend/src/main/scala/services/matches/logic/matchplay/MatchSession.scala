@@ -162,7 +162,7 @@ object MatchSession:
       .fold(error => throw IllegalStateException(error), identity)
 
   def demoSetup(cards: List[Athlete], computerOpponent: Boolean, computerHome: Boolean,
-      teamSize: Int, selection: Option[AthleteId]): Either[String, MatchSetup] =
+      teamSize: Int, selection: Option[AthleteId], homeTactics: TeamTactics = TeamTactics.default): Either[String, MatchSetup] =
     val home = cards.filter(_.side == Side.Home)
     if teamSize < 1 || teamSize > 2 then return Left("Team size must be 1 or 2")
     if selection.exists(id => !home.exists(_.id == id)) then return Left("Choose a home athlete card")
@@ -178,4 +178,5 @@ object MatchSession:
     Right(MatchSetup(roster, players,
       roster.map(_.id -> AthleteRole.Chaser).toMap,
       players.zip(roster).map((player, athlete) => ControlAssignment(player.id, athlete.id, allowed)),
-      BallSetup(BallPhysics(.15, .6, .002, .0001), Map.empty, None)))
+      BallSetup(BallPhysics(.15, .6, .002, .0001), Map.empty, None),
+      Some(MatchTactics(homeTactics, TeamTactics.default))))
