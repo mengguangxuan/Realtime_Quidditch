@@ -3,6 +3,12 @@ package services.matches.logic
 import services.matches.objects.*
 
 private[matches] object ComputerPilot:
+  def penaltyShot(athlete: AthleteState, side: Side): Option[Control] =
+    val sign = if side == Side.Home then 1 else -1
+    val target = Vec3(Pitch.alpine.goalPlaneX * sign, 7.1, 10.6)
+    Direction.from(target - athlete.flight.position.value).toOption
+      .map(direction => Control.Shoot(ShotAim(direction, ShotPower(1), None)))
+
   def controls(state: MatchState, balls: MatchBalls, assignment: ControlAssignment,
       passTarget: Option[AthleteId] = None): List[Control] =
     val athlete = state.setup.roster.find(_.id == assignment.athlete).get

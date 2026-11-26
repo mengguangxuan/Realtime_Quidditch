@@ -2,8 +2,6 @@ package services.matches.logic
 
 import services.matches.objects.*
 
-import QuaffleRules.free
-
 private[matches] object FlightRules:
   private val dt = MatchSimulation.stepSeconds
   private val pitch = Pitch.alpine
@@ -69,10 +67,10 @@ private[matches] object FlightRules:
     val factor = math.max(1.0, radius)
     Vec3(point.x / factor, point.y / factor, clamp(point.z, floor, pitch.ceiling))
 
-  def contact(state: MatchState, balls: MatchBalls, first: Athlete, second: Athlete,
-      kind: ContactKind): (MatchState, MatchBalls, List[MatchEvent]) =
-    val source = state.athletes(first.id)
-    val target = state.athletes(second.id)
+  final case class ContactImpact(source: AthleteState, target: AthleteState, axis: Vec3, impulse: Double)
+
+  def contact(first: Athlete, source: AthleteState, second: Athlete, target: AthleteState,
+      kind: ContactKind): ContactImpact =
     val offset = target.flight.position.value - source.flight.position.value
     val axis = Direction.from(offset).getOrElse(source.flight.facing).value
     val closing = math.max(0, (source.flight.velocity.value - target.flight.velocity.value).dot(axis))
@@ -87,29 +85,4 @@ private[matches] object FlightRules:
       flight = target.flight.copy(velocity = Velocity(target.flight.velocity.value + axis * (impulse * .32))))
     val changedSource = source.copy(flight = source.flight.copy(
       velocity = Velocity(source.flight.velocity.value - axis * (impulse * .22))))
-    val changed = state.copy(athletes = state.athletes.updated(second.id, changedTarget).updated(first.id, changedSource))
-    val foulKind = kind match
-      case ContactKind.Grab => Some(FoulKind.Grabbing)
-      case ContactKind.Charge if axis.dot(target.flight.facing.value) > .65 => Some(FoulKind.RearCharge)
-      case ContactKind.Charge if impulse >= 25 => Some(FoulKind.ExcessiveCharge)
-      case _ => None
-    val hasBall = balls.quaffle == QuaffleState.HeldBy(second.id)
-    foulKind match
-      case Some(reason) =>
-        val point = target.flight.position
-        val attackingX = if second.side == Side.Home then point.value.x else -point.value.x
-        val clearChance = hasBall && attackingX >= 31 && math.abs(point.value.y) < 10
-        val foul = Foul(first.id, second.id, reason, point, clearChance)
-        val count = state.fouls.getOrElse(first.id, 0) + 1
-        val restart = if clearChance || count >= 2 then Restart.PenaltyThrow(second.side, foul)
-          else Restart.FreePossession(second.side, point, foul)
-        (changed.copy(fouls = changed.fouls.updated(first.id, count),
-          phase = MatchPhase.RestartPending(restart, balls.special)), balls, List(MatchEvent.FoulCalled(foul)))
-      case None =>
-        val shield = second.ratings.ballControl.shielding.value
-        val threshold = (if target.movement == MovementMode.Bracing then 48 else 65) - shield * .26
-        if hasBall && stability.value < threshold then
-          val dropped = free(changedTarget.flight.position.value + axis * .4, changedTarget.flight.velocity.value)
-          (changed, balls.copy(quaffle = dropped), List(MatchEvent.QuafflePossessionChanged(
-            QuafflePossessionOutcome.Dropped(second.id, dropped.motion))))
-        else (changed, balls, Nil)
+    ContactImpact(changedSource, changedTarget, axis, impulse)

@@ -4,7 +4,8 @@ import java.util.concurrent.ThreadLocalRandom
 import services.matches.objects.*
 import MatchSimulation.{Inputs, begin, formation, resume, ticksPerSecond}
 
-final class MatchSession private (initial: MatchState, shotSeed: Long, recordFrame: TimelineFrame => Unit):
+final class MatchSession private (initial: MatchState, shotSeed: Long, recordFrame: TimelineFrame => Unit,
+    rules: MatchRules):
   private val opening = TimelineFrame(SimulationTick(0), initial, Nil)
   recordFrame(opening)
   private var timeline = MatchTimeline(initial.id, Vector(opening))
@@ -38,6 +39,8 @@ final class MatchSession private (initial: MatchState, shotSeed: Long, recordFra
         ActionRejection.ControlNotAllowed(control.kind))
       _ <- state.phase match
         case MatchPhase.InPlay(_) => Right(())
+        case penalty: MatchPhase.Penalty
+            if control.kind == ControlKind.Shoot && rules.canTakePenalty(penalty, assignment.athlete) => Right(())
         case _ => Left(ActionRejection.MatchNotInPlay)
       _ <- Either.cond(pending.size < 256, (), ActionRejection.TemporarilyUnavailable)
     yield assignment
@@ -69,6 +72,18 @@ final class MatchSession private (initial: MatchState, shotSeed: Long, recordFra
   def advance(): TimelineFrame = synchronized {
     val state = latest.state
     state.phase match
+      case penalty @ MatchPhase.Penalty(_, side, shooter, _) =>
+        val computerShoots = rules.canTakePenalty(penalty, shooter) && state.controls.exists(assignment =>
+          assignment.athlete == shooter && assignment.allowedControls.contains(ControlKind.Shoot) &&
+            state.setup.players.exists(player => player.id == assignment.player && player.kind == PlayerKind.Computer))
+        val computer = if computerShoots then ComputerPilot.penaltyShot(state.athletes(shooter), side) else None
+        val commands = pending ++ computer.map(shooter -> _)
+        val step = MatchSimulation.advancePenalty(state, penalty, commands, inputs, shotSeed, rules)
+        val saved = append(step.state, step.events)
+        pending = Vector.empty
+        inputs = step.inputs
+        restartTicks = 0
+        saved
       case MatchPhase.InPlay(balls) =>
         val assignments = nextControls.getOrElse(state.controls)
         val switched = assignments.filterNot(state.controls.contains)
@@ -82,7 +97,7 @@ final class MatchSession private (initial: MatchState, shotSeed: Long, recordFra
           .flatMap(assignment => ComputerPilot.controls(active, balls, assignment, passTarget)
             .map(assignment.athlete -> _))
         val currentInputs = inputs.copy(flight = inputs.flight -- affected, contacts = inputs.contacts -- affected)
-        val step = MatchSimulation.advance(active, balls, pending ++ computer, currentInputs, shotSeed)
+        val step = MatchSimulation.advance(active, balls, pending ++ computer, currentInputs, shotSeed, rules)
         val saved = append(step.state, events ++ step.events)
         pending = Vector.empty
         nextControls = None
@@ -90,8 +105,12 @@ final class MatchSession private (initial: MatchState, shotSeed: Long, recordFra
         restartTicks = 0
         saved
       case MatchPhase.RestartPending(restart, special) =>
-        if restartTicks + 1 >= ticksPerSecond then
-          val saved = append(resume(state, restart, special), Nil)
+        if restartTicks + 1 >= rules.restartTicks then
+          val resumed = resume(state, restart, special, rules)
+          val before = state.controls.map(entry => entry.player -> entry.athlete).toMap
+          val switched = resumed.controls.filter(entry => before(entry.player) != entry.athlete)
+          val events = switched.map(entry => MatchEvent.ControlChanged(entry.player, before(entry.player), entry.athlete))
+          val saved = append(resumed, events)
           inputs = Inputs(shots = inputs.shots)
           saved
         else
@@ -110,7 +129,7 @@ final class MatchSession private (initial: MatchState, shotSeed: Long, recordFra
 object MatchSession:
   def create(id: MatchId, setup: MatchSetup, durationTicks: Long,
       shotSeed: Long = ThreadLocalRandom.current().nextLong(),
-      recordFrame: TimelineFrame => Unit = _ => ()): Either[String, MatchSession] =
+      recordFrame: TimelineFrame => Unit = _ => (), rules: MatchRules = MatchRules.standard): Either[String, MatchSession] =
     val ids = setup.roster.map(_.id)
     val expectedSides = Set(Side.Home, Side.Away)
     val assigned = setup.assignments.map(_.athlete)
@@ -131,7 +150,7 @@ object MatchSession:
     yield
       val athletes = formation(setup.roster)
       new MatchSession(MatchState(id, setup, setup.assignments, athletes, Score(0, 0), MatchClock(PlayTick(0), durationTicks),
-        Map.empty, MatchPhase.Ready), shotSeed, recordFrame)
+        Map.empty, MatchPhase.Ready), shotSeed, recordFrame, rules)
 
   def demo(cards: List[Athlete], computerOpponent: Boolean = false,
       shotSeed: Long = ThreadLocalRandom.current().nextLong(),

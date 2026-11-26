@@ -1,22 +1,12 @@
 package services.matches.objects
 
-import io.circe.{Codec, Decoder, Encoder, KeyDecoder, KeyEncoder}
+import io.circe.Codec
 import io.circe.generic.semiauto.deriveCodec
 
 final case class SimulationTick(value: Long)
 
 object SimulationTick:
   given Codec.AsObject[SimulationTick] = deriveCodec[SimulationTick]
-
-final case class PlayTick(value: Long)
-
-object PlayTick:
-  given Codec.AsObject[PlayTick] = deriveCodec[PlayTick]
-
-final case class MatchClock(elapsed: PlayTick, durationTicks: Long)
-
-object MatchClock:
-  given Codec.AsObject[MatchClock] = deriveCodec[MatchClock]
 
 enum MatchEvent:
   case QuafflePossessionChanged(outcome: QuafflePossessionOutcome)
@@ -27,6 +17,11 @@ enum MatchEvent:
   case ContactResolved(athlete: AthleteId, opponent: AthleteId, kind: ContactKind)
   case ControlChanged(player: PlayerId, from: AthleteId, to: AthleteId)
   case FoulCalled(foul: Foul)
+  case AttackExpired(side: Side)
+  case PenaltyScored(shooter: AthleteId)
+  case PenaltyMissed(shooter: AthleteId)
+  case PenaltyBlocked(shooter: AthleteId, by: AthleteId)
+  case PenaltyExpired(shooter: AthleteId)
   case MatchEnded(reason: FinishReason)
   case ControlRejected(athlete: AthleteId, reason: ActionRejection)
 

@@ -17,6 +17,7 @@ var _wanted_flight: Dictionary = {}
 var _last_flight: Dictionary = {}
 var _requesting_start := false
 var _in_play := false
+var _taking_penalty := false
 var _can_send := true
 
 
@@ -48,10 +49,10 @@ func _process(delta: float) -> void:
 	if _requesting_start:
 		_requesting_start = false
 		_send.request(base_url + "/start", _auth_headers(), HTTPClient.METHOD_POST)
-	elif _in_play:
+	elif _in_play or _taking_penalty:
 		if not _outgoing.is_empty():
 			_send_control(_outgoing.pop_front())
-		elif not _wanted_flight.is_empty() and (_wanted_flight != _last_flight or _time_since_flight >= 0.25):
+		elif _in_play and not _wanted_flight.is_empty() and (_wanted_flight != _last_flight or _time_since_flight >= 0.25):
 			_last_flight = _wanted_flight
 			_time_since_flight = 0.0
 			_send_control({"Fly": {"input": _wanted_flight}})
@@ -70,7 +71,7 @@ func resend_flight() -> void:
 
 
 func control(action: Dictionary) -> void:
-	if _in_play and _outgoing.size() < 12:
+	if (_in_play or (_taking_penalty and action.has("Shoot"))) and _outgoing.size() < 12:
 		_outgoing.append(action)
 
 
@@ -98,15 +99,19 @@ func _poll_completed(result: int, code: int, _headers: PackedStringArray, body: 
 	var decoded: Variant = JSON.parse_string(body.get_string_from_utf8())
 	if result != HTTPRequest.RESULT_SUCCESS or code != 200 or not decoded is Dictionary:
 		_in_play = false
+		_taking_penalty = false
 		_outgoing.clear()
 		_last_flight = {}
 		connection_changed.emit(false)
 		return
-	var now_live: bool = decoded["state"]["phase"].has("InPlay")
-	if not now_live:
+	var phase: Dictionary = decoded["state"]["phase"]
+	var now_live := phase.has("InPlay")
+	var now_taking_penalty: bool = phase.get("Penalty", {}).get("balls", {}).get("quaffle", {}).has("HeldBy")
+	if _in_play != now_live or _taking_penalty != now_taking_penalty:
 		_outgoing.clear()
 		_last_flight = {}
 	_in_play = now_live
+	_taking_penalty = now_taking_penalty
 	connection_changed.emit(true)
 	snapshot_received.emit(decoded)
 

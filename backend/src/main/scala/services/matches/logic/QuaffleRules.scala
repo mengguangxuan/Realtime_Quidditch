@@ -9,11 +9,9 @@ private[matches] object QuaffleRules:
   private val pitch = Pitch.alpine
 
   enum BallStep:
-    case Moved(motion: BallMotion)
+    case Moved(motion: BallMotion, hitBoundary: Boolean)
     case Blocked(by: AthleteId, motion: BallMotion)
     case Scored(side: Side)
-
-  private def opponent(side: Side): Side = if side == Side.Home then Side.Away else Side.Home
 
   def free(position: Vec3, velocity: Vec3 = Vec3.zero): QuaffleState.Free =
     QuaffleState.Free(BallMotion(Position(position), Velocity(velocity), AngularVelocity(Vec3.zero)))
@@ -65,7 +63,9 @@ private[matches] object QuaffleRules:
       case Some(hit) => BallStep.Blocked(hit.athlete, bounceOffAthlete(motion, nextVelocity, hit))
       case None => crossing match
         case Some((side, _)) => BallStep.Scored(side)
-        case None => BallStep.Moved(moveWithinPitch(motion, next, nextVelocity, physics))
+        case None =>
+          val bounded = moveWithinPitch(motion, next, nextVelocity, physics)
+          BallStep.Moved(bounded, bounded.position.value != next)
 
   def predictStep(motion: BallMotion, physics: BallPhysics): (BallMotion, Option[(Side, Vec3)]) =
     val point = motion.position.value
@@ -102,11 +102,6 @@ private[matches] object QuaffleRules:
       )
       val friction = if bounded.z <= physics.radiusMeters then .91 else 1.0
       BallMotion(Position(bounded), Velocity(bounce * friction), motion.spin)
-
-  def goal(state: MatchState, balls: MatchBalls, side: Side): MatchState =
-    val score = if side == Side.Home then state.score.copy(home = state.score.home + 10)
-      else state.score.copy(away = state.score.away + 10)
-    state.copy(score = score, phase = MatchPhase.RestartPending(Restart.Kickoff(opponent(side)), balls.special))
 
   def contactRadius(athlete: Athlete, role: AthleteRole, ballRadius: Double): Double =
     ballRadius + (if role == AthleteRole.Keeper then .85 + athlete.ratings.goalkeeping.reach.value * .003 else .75)

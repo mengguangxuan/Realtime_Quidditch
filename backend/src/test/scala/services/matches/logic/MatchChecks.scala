@@ -89,12 +89,17 @@ object MatchChecks:
     val attacker = place(challenger.id, Vec3(0, -1, 7), Vec3(0, 5, 0), false)
     val holder = place(carrier.id, Vec3(0, 0, 7), Vec3.zero, false)
     val contactState = demo.copy(athletes = Map(challenger.id -> attacker, carrier.id -> holder))
-    val (_, dropped, _) = FlightRules.contact(contactState, live, challenger, carrier, ContactKind.Charge)
+    def resolveContact(state: MatchState, kind: ContactKind): (MatchState, MatchBalls, List[MatchEvent]) =
+      val impact = FlightRules.contact(challenger, state.athletes(challenger.id),
+        carrier, state.athletes(carrier.id), kind)
+      MatchRules.standard.resolveContact(state, live, challenger, carrier, kind, impact)
+
+    val (_, dropped, _) = resolveContact(contactState, ContactKind.Charge)
     assert(dropped.quaffle.isInstanceOf[QuaffleState.Free])
     val braced = contactState.copy(athletes = contactState.athletes.updated(carrier.id,
       holder.copy(movement = MovementMode.Bracing)))
-    assert(FlightRules.contact(braced, live, challenger, carrier, ContactKind.Charge)._2.quaffle == live.quaffle)
-    val (fouled, _, events) = FlightRules.contact(contactState, live, challenger, carrier, ContactKind.Grab)
+    assert(resolveContact(braced, ContactKind.Charge)._2.quaffle == live.quaffle)
+    val (fouled, _, events) = resolveContact(contactState, ContactKind.Grab)
     assert(fouled.fouls(challenger.id) == 1)
     assert(fouled.phase.isInstanceOf[MatchPhase.RestartPending])
     assert(events.exists {
@@ -105,6 +110,7 @@ object MatchChecks:
     checkHistory()
     checkRiderMovement(demo)
     checkShotsAndBlocks(demo)
+    checkCompetitionRules(demo)
     checkDefensePlanning(demo)
     val solo = MatchSession.demo(cards, computerOpponent = true, shotSeed = 42)
     assert(solo.start().isRight)
@@ -113,6 +119,89 @@ object MatchChecks:
     assert(Iterator.fill(900)(()).map(_ => solo.advance()).exists(_.state.score.away == 10))
     checkComputerMatch()
     println("Verified controls, catch, release, goal, restart, contact, foul, timeline and HTTP routes")
+
+  private def checkCompetitionRules(demo: MatchState): Unit =
+    val rules = MatchRules(attackSeconds = 1)
+    val special = SpecialBalls(Map.empty, None)
+    val home = demo.setup.roster.find(_.side == Side.Home).get
+    val away = demo.setup.roster.find(_.side == Side.Away).get
+    val held = MatchBalls(QuaffleState.HeldBy(home.id), special)
+    val live = demo.copy(phase = MatchPhase.InPlay(held), attackClock = Some(MatchClock.Attack(Side.Home, 1)))
+    val expired = MatchSimulation.advance(live, held, Vector.empty, MatchSimulation.Inputs(), 42, rules)
+    assert(expired.events == List(MatchEvent.AttackExpired(Side.Home)))
+    val restart = rules.endRestart(Side.Away, MatchEvent.AttackExpired(Side.Home))
+    assert(expired.state.phase == MatchPhase.RestartPending(restart, special))
+    val resumed = MatchSimulation.resume(expired.state, restart, special, rules)
+    assert(resumed.attackClock.contains(MatchClock.Attack(Side.Away, 20)))
+    assert(resumed.athletes(away.id).flight.position.value == Vec3(36, 0, 9))
+    val tooLate = MatchSimulation.advance(live.copy(attackClock = Some(MatchClock.Attack(Side.Home, 0))),
+      held, Vector(home.id -> Control.Shoot(ShotAim(Direction.east, ShotPower(1), None))),
+      MatchSimulation.Inputs(), 42, rules)
+    assert(tooLate.events == List(MatchEvent.ControlRejected(home.id, ActionRejection.TemporarilyUnavailable),
+      MatchEvent.AttackExpired(Side.Home)))
+
+    val highShot = QuaffleRules.free(Vec3(43, 0, 12), Vec3(25, 0, 0)).motion
+    val movedAway = live.athletes.updated(away.id, live.athletes(away.id).copy(
+      flight = MatchSimulation.initialAthlete(Side.Away).flight))
+    val shooting = live.copy(athletes = movedAway)
+    val flight = MatchSimulation.Inputs(shotUntil = Some(live.clock.elapsed.value + 4))
+    val lastSecond = MatchSimulation.advance(shooting, held.copy(quaffle = QuaffleState.Free(
+      highShot.copy(position = Position(Vec3(42, 0, 12))))), Vector.empty, flight, 42, rules)
+    assert(lastSecond.state.attackClock.contains(MatchClock.Attack(Side.Home, 0)))
+    val buzzerGoal = MatchSimulation.advance(shooting, held.copy(quaffle = QuaffleState.Free(highShot)),
+      Vector.empty, flight, 42, rules)
+    assert(buzzerGoal.events.contains(MatchEvent.QuaffleGoal(Side.Home)))
+
+    val foul = Foul(away.id, home.id, FoulKind.RearCharge, Position(Vec3(31, 0, 12)), deniedClearChance = true)
+    val penaltyRestart = Restart.PenaltyThrow(Side.Home, foul)
+    assert(rules.foulRestart(Side.Home, foul, 1) == penaltyRestart)
+    assert(rules.foulRestart(Side.Home, foul.copy(deniedClearChance = false), 2).isInstanceOf[Restart.PenaltyThrow])
+    val penalty = MatchSimulation.resume(live, penaltyRestart, special, rules)
+    val attempt = penalty.phase.asInstanceOf[MatchPhase.Penalty]
+    assert(attempt.shooter == home.id && attempt.balls.quaffle == held.quaffle)
+    assert(penalty.athletes(home.id).flight.position.value == Vec3(33, 0, 12))
+    assert(penalty.attackClock.isEmpty)
+    val wrongHolder: MatchPhase.Penalty =
+      attempt.copy(balls = held.copy(quaffle = QuaffleState.HeldBy(away.id)))
+    val shoot = Control.Shoot(ShotAim(Direction.east, ShotPower(1), None))
+    val rejected = MatchSimulation.advancePenalty(penalty.copy(phase = wrongHolder), wrongHolder,
+      Vector(home.id -> shoot, away.id -> shoot), MatchSimulation.Inputs(), 42, rules)
+    assert(rejected.state.phase == wrongHolder.copy(remainingTicks = wrongHolder.remainingTicks - 1))
+    assert(rejected.events.isEmpty)
+
+    def resolve(ball: QuaffleState, state: MatchState = penalty): MatchSimulation.Step =
+      val phase = attempt.copy(balls = held.copy(quaffle = ball), remainingTicks = 1)
+      MatchSimulation.advancePenalty(state.copy(phase = phase), phase, Vector.empty, MatchSimulation.Inputs(), 42, rules)
+
+    def checkOutcome(step: MatchSimulation.Step, outcome: MatchEvent): Unit =
+      assert(step.events.contains(outcome))
+      assert(step.state.clock == penalty.clock)
+      assert(step.state.phase == MatchPhase.RestartPending(
+        rules.endRestart(Side.Away, outcome), special))
+
+    checkOutcome(resolve(held.quaffle), MatchEvent.PenaltyExpired(home.id))
+    val miss = QuaffleRules.free(Vec3(33, 0, .2), Vec3(0, 0, -4))
+    checkOutcome(resolve(miss), MatchEvent.PenaltyMissed(home.id))
+    val blocked = QuaffleRules.free(Vec3(40, 0, 12), Vec3(30, 0, 0))
+    checkOutcome(resolve(blocked), MatchEvent.PenaltyBlocked(home.id, away.id))
+    val scored = resolve(QuaffleState.Free(highShot))
+    checkOutcome(scored, MatchEvent.PenaltyScored(home.id))
+    assert(scored.state.score.home == penalty.score.home + 10)
+    assert(scoreFromEvents(penalty.score, scored.events) == scored.state.score)
+    val finalClock = penalty.clock.copy(elapsed = PlayTick(penalty.clock.durationTicks))
+    val finalPenalty = resolve(QuaffleState.Free(highShot), penalty.copy(clock = finalClock))
+    assert(finalPenalty.state.phase == MatchPhase.Finished(FinishReason.TimeExpired))
+    assert(finalPenalty.events.contains(MatchEvent.MatchEnded(FinishReason.TimeExpired)))
+
+    val json = live.asJson.mapObject(_.remove("attackClock"))
+    assert(json.as[MatchState] == Right(live.copy(attackClock = None)))
+
+  private def scoreFromEvents(initial: Score, events: Iterable[MatchEvent]): Score =
+    events.foldLeft(initial) {
+      case (score, MatchEvent.QuaffleGoal(Side.Home)) => score.copy(home = score.home + 10)
+      case (score, MatchEvent.QuaffleGoal(Side.Away)) => score.copy(away = score.away + 10)
+      case (score, _) => score
+    }
 
   private def checkComputerMatch(): Unit =
     val equalCards = cards.map(_.copy(ratings = cards.head.ratings))
@@ -141,6 +230,7 @@ object MatchChecks:
     val contacts = events.count(_.isInstanceOf[MatchEvent.ContactResolved])
     assert(attempts > 0 && contacts > 0)
     val score = session.latest.state.score
+    assert(scoreFromEvents(Score(0, 0), events ++ session.latest.events) == score)
     println(s"CPU vs CPU (seed 42): ${score.home}-${score.away}, $releases releases, $blocks blocks, $attempts contact attempts, $contacts contacts")
 
   private def checkRiderMovement(demo: MatchState): Unit =

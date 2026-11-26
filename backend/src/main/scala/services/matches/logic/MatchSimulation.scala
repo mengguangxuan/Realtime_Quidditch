@@ -3,10 +3,10 @@ package services.matches.logic
 import services.matches.objects.*
 
 import FlightRules.{clamp, contact, move}
-import QuaffleRules.{advanceBall, catchQuaffle, free, goal, pass, shoot}
+import QuaffleRules.{advanceBall, catchQuaffle, free, pass, shoot}
 
 private[matches] object MatchSimulation:
-  val ticksPerSecond = 20
+  val ticksPerSecond = MatchClock.ticksPerSecond
   val stepSeconds = 1.0 / ticksPerSecond
   private val kickoff = Vec3(0, 0, 7)
   private val emptySpecial = SpecialBalls(Map.empty, None)
@@ -18,7 +18,8 @@ private[matches] object MatchSimulation:
       touching: Set[(AthleteId, AthleteId)] = Set.empty,
       contacts: Map[AthleteId, ContactAttempt] = Map.empty,
       shots: Long = 0,
-      passTarget: Option[(AthleteId, Long)] = None
+      passTarget: Option[(AthleteId, Long)] = None,
+      shotUntil: Option[Long] = None
   )
 
   final case class Step(state: MatchState, events: List[MatchEvent], inputs: Inputs)
@@ -41,37 +42,90 @@ private[matches] object MatchSimulation:
   def begin(state: MatchState): MatchState =
     state.copy(phase = MatchPhase.InPlay(MatchBalls(free(kickoff), emptySpecial)))
 
-  def resume(state: MatchState, restart: Restart, special: SpecialBalls): MatchState =
-    def possession(side: Side, at: Vec3, defendingAt: Option[Vec3]): MatchState =
-      val receiver = state.setup.roster.find(_.side == side).get
-      val athletes = state.setup.roster.map { athlete =>
-        val entry = state.athletes(athlete.id)
-        val point = if athlete.id == receiver.id then Some(at)
-          else if state.setup.roster.find(_.side != side).contains(athlete) then defendingAt
-          else None
-        athlete.id -> entry.copy(
-          flight = entry.flight.copy(position = point.map(Position.apply).getOrElse(entry.flight.position),
-            velocity = Velocity(Vec3.zero)),
-          movement = MovementMode.Normal
-        )
-      }.toMap
-      state.copy(athletes = athletes, phase = MatchPhase.InPlay(MatchBalls(QuaffleState.HeldBy(receiver.id), special)))
+  def resume(state: MatchState, restart: Restart, special: SpecialBalls, rules: MatchRules): MatchState =
+    def receiver(side: Side): AthleteId =
+      state.setup.players.find(player => player.side == side && player.kind == PlayerKind.Human)
+        .flatMap(player => state.controls.find(_.player == player.id).map(_.athlete))
+        .getOrElse(state.setup.roster.find(_.side == side).get.id)
+
+    def place(entry: AthleteState, at: Vec3, facing: Direction): AthleteState =
+      entry.copy(flight = FlightState(Position(at), Velocity(Vec3.zero), facing), movement = MovementMode.Normal)
+
+    def possession(side: Side, who: AthleteId, athletes: Map[AthleteId, AthleteState]): MatchState =
+      state.copy(athletes = athletes, attackClock = Some(rules.attackFor(side)),
+        phase = MatchPhase.InPlay(MatchBalls(QuaffleState.HeldBy(who), special)))
+
     restart match
       case Restart.Kickoff(side) =>
-        val athletes = formation(state.setup.roster)
-        val receiver = state.setup.roster.find(_.side == side).get
-        state.copy(athletes = athletes, phase = MatchPhase.InPlay(MatchBalls(QuaffleState.HeldBy(receiver.id), special)))
-      case Restart.FreePossession(side, at, _) => possession(side, at.value, None)
-      case Restart.PenaltyThrow(side, _) =>
-        val sign = if side == Side.Home then 1 else -1
-        possession(side, Vec3(sign * 33, 0, 12), Some(Vec3(sign * 42, 0, 12)))
+        possession(side, receiver(side), formation(state.setup.roster))
+      case Restart.TeamPossession(side, at, _) =>
+        val who = receiver(side)
+        val reset = formation(state.setup.roster)
+        possession(side, who, reset.updated(who, place(reset(who), at.value, initialAthlete(side).flight.facing)))
+      case Restart.FreePossession(side, at, _) =>
+        val who = receiver(side)
+        val stopped = state.athletes.map { (id, entry) =>
+          val position = if id == who then at.value else entry.flight.position.value
+          id -> place(entry, position, entry.flight.facing)
+        }
+        possession(side, who, stopped)
+      case Restart.PenaltyThrow(side, foul) =>
+        val who = foul.victim
+        val defense = MatchRules.opponent(side)
+        val defender = receiver(defense)
+        val placed = formation(state.setup.roster)
+        val athletes = placed
+          .updated(who, place(placed(who), rules.penaltySpot(side), initialAthlete(side).flight.facing))
+          .updated(defender, place(placed(defender), rules.penaltyDefenderSpot(side), initialAthlete(defense).flight.facing))
+        val controls = state.setup.players.find(player => player.side == side && player.kind == PlayerKind.Human)
+          .flatMap(player => PlayerControl.switchTo(state.setup, state.controls, player.id, who).toOption)
+          .getOrElse(state.controls)
+        state.copy(athletes = athletes, controls = controls, attackClock = None,
+          phase = MatchPhase.Penalty(MatchBalls(QuaffleState.HeldBy(who), special), side, who, rules.penaltyAimTicks))
+
+  def advancePenalty(state: MatchState, penalty: MatchPhase.Penalty,
+      queued: Vector[(AthleteId, Control)], inputs: Inputs, shotSeed: Long, rules: MatchRules): Step =
+    val shooter = penalty.shooter
+
+    def resolve(outcome: MatchRules.PenaltyResult, nextInputs: Inputs): Step =
+      val (finished, events) = rules.finishPenalty(state, penalty, outcome)
+      Step(finished, events, nextInputs)
+
+    def advanceShot(motion: BallMotion, ticksLeft: Long, nextInputs: Inputs): Step =
+      val flight = advanceBall(motion, state, state, Some(shooter))
+      rules.penaltyShotResult(penalty, flight, ticksLeft) match
+        case Left(next) =>
+          val balls = penalty.balls.copy(quaffle = QuaffleState.Free(next))
+          Step(state.copy(phase = penalty.copy(balls = balls, remainingTicks = ticksLeft)), Nil, nextInputs)
+        case Right(outcome) => resolve(outcome, nextInputs)
+
+    penalty.balls.quaffle match
+      case QuaffleState.Free(motion) =>
+        advanceShot(motion, penalty.remainingTicks - 1, inputs)
+      case QuaffleState.HeldBy(holder) =>
+        val aim = queued.collectFirst {
+          case (id, Control.Shoot(aim)) if id == holder && rules.canTakePenalty(penalty, id) => aim
+        }
+        aim match
+          case Some(shotAim) =>
+            val athlete = state.setup.roster.find(_.id == shooter).get
+            val motion = shoot(state, athlete, shotAim, seedForShot(shotSeed, inputs.shots))
+            val released = MatchEvent.QuafflePossessionChanged(QuafflePossessionOutcome.Released(shooter, motion))
+            val step = advanceShot(motion, rules.shotFlightTicks - 1, inputs.copy(shots = inputs.shots + 1))
+            step.copy(events = released :: step.events)
+          case None if penalty.remainingTicks <= 1 => resolve(MatchEvent.PenaltyExpired(shooter), inputs)
+          case None =>
+            Step(state.copy(phase = penalty.copy(remainingTicks = penalty.remainingTicks - 1)), Nil, inputs)
+
+  private def seedForShot(seed: Long, shots: Long): Long = seed ^ (shots * 0x9e3779b97f4a7c15L)
 
   def advance(
       start: MatchState,
       initialBalls: MatchBalls,
       queued: Vector[(AthleteId, Control)],
       previous: Inputs,
-      shotSeed: Long
+      shotSeed: Long,
+      rules: MatchRules = MatchRules.standard
   ): Step =
     var state = start
     var balls = initialBalls
@@ -81,6 +135,8 @@ private[matches] object MatchSimulation:
     var flightInputs = previous.flight
     var shots = previous.shots
     var passTarget = previous.passTarget.filter(_._2 >= step)
+    var shotUntil = previous.shotUntil.filter(_ >= step)
+    var attackClock = start.attackClock
     var thrower = Option.empty[AthleteId]
     val roster = state.setup.roster
 
@@ -91,6 +147,8 @@ private[matches] object MatchSimulation:
       def possession(next: QuaffleState, outcome: QuafflePossessionOutcome): Unit =
         balls = balls.copy(quaffle = next)
         events += MatchEvent.QuafflePossessionChanged(outcome)
+      def ownBall(): Unit =
+        if attackClock.forall(_.side != athlete.side) then attackClock = Some(rules.attackFor(athlete.side))
       control match
         case Control.Fly(input) => flightInputs = flightInputs.updated(id, input)
         case Control.Brace(active) =>
@@ -100,14 +158,18 @@ private[matches] object MatchSimulation:
         case Control.Catch(CatchTarget.Quaffle) =>
           if catchQuaffle(state, athlete, balls.quaffle) then
             passTarget = None
+            shotUntil = None
+            ownBall()
             possession(QuaffleState.HeldBy(id), QuafflePossessionOutcome.Caught(id))
         case Control.Shoot(aim) =>
-          if balls.quaffle == QuaffleState.HeldBy(id) then
-            val motion = shoot(state, athlete, aim, shotSeed ^ (shots * 0x9e3779b97f4a7c15L))
+          if balls.quaffle != QuaffleState.HeldBy(id) then reject(ActionRejection.NotBallHolder)
+          else if attackClock.exists(_.remainingTicks == 0) then reject(ActionRejection.TemporarilyUnavailable)
+          else
+            val motion = shoot(state, athlete, aim, seedForShot(shotSeed, shots))
             shots += 1
+            shotUntil = Some(step + rules.shotFlightTicks - 1)
             thrower = Some(id)
             possession(QuaffleState.Free(motion), QuafflePossessionOutcome.Released(id, motion))
-          else reject(ActionRejection.NotBallHolder)
         case Control.Pass(receiver) =>
           if balls.quaffle != QuaffleState.HeldBy(id) then reject(ActionRejection.NotBallHolder)
           else if !roster.exists(mate => mate.id == receiver && mate.id != id && mate.side == athlete.side) then
@@ -149,7 +211,8 @@ private[matches] object MatchSimulation:
         val relevantContacts = if first.side == second.side then Map.empty else contacts
         val (initiator, opponent, kind) = contactInitiative(state, first, second, relative, relevantContacts)
         events += MatchEvent.ContactResolved(initiator.id, opponent.id, kind)
-        val (updated, updatedBalls, contactEvents) = contact(state, balls, initiator, opponent, kind)
+        val impact = contact(initiator, state.athletes(initiator.id), opponent, state.athletes(opponent.id), kind)
+        val (updated, updatedBalls, contactEvents) = rules.resolveContact(state, balls, initiator, opponent, kind, impact)
         state = updated
         balls = updatedBalls
         events ++= contactEvents
@@ -162,21 +225,42 @@ private[matches] object MatchSimulation:
           case QuaffleState.Free(motion) =>
             advanceBall(motion, before, state, thrower) match
               case QuaffleRules.BallStep.Scored(side) =>
-                state = goal(state, balls, side)
+                state = state.copy(score = MatchRules.addGoal(state.score, side),
+                  phase = MatchPhase.RestartPending(
+                    rules.endRestart(MatchRules.opponent(side), MatchEvent.QuaffleGoal(side)), balls.special))
                 events += MatchEvent.QuaffleGoal(side)
               case QuaffleRules.BallStep.Blocked(by, next) =>
+                shotUntil = None
                 state = state.copy(phase = MatchPhase.InPlay(balls.copy(quaffle = QuaffleState.Free(next))))
                 events += MatchEvent.QuaffleBlocked(by)
-              case QuaffleRules.BallStep.Moved(next) =>
+              case QuaffleRules.BallStep.Moved(next, hitBoundary) =>
+                if hitBoundary || shotUntil.contains(step) then shotUntil = None
                 state = state.copy(phase = MatchPhase.InPlay(balls.copy(quaffle = QuaffleState.Free(next))))
           case QuaffleState.HeldBy(_) => ()
       case _ => ()
+    val penaltyAwarded = state.phase match
+      case MatchPhase.RestartPending(Restart.PenaltyThrow(_, _), _) => true
+      case _ => false
     val elapsed = PlayTick(step)
-    if elapsed.value == state.clock.durationTicks then
+    if elapsed.value == state.clock.durationTicks && !penaltyAwarded then
       state = state.copy(phase = MatchPhase.Finished(FinishReason.TimeExpired))
       events += MatchEvent.MatchEnded(FinishReason.TimeExpired)
-    Step(state.copy(clock = state.clock.copy(elapsed = elapsed)), events.result(),
-      Inputs(flightInputs, touching.result(), contacts, shots, passTarget))
+    val remainingAttack = state.phase match
+      case MatchPhase.InPlay(_) =>
+        attackClock.map { clock =>
+          val remaining = math.max(0L, clock.remainingTicks - 1)
+          if remaining == 0 && shotUntil.isEmpty then
+            state = state.copy(phase = MatchPhase.RestartPending(
+              rules.endRestart(MatchRules.opponent(clock.side), MatchEvent.AttackExpired(clock.side)), balls.special))
+            events += MatchEvent.AttackExpired(clock.side)
+          clock.copy(remainingTicks = remaining)
+        }
+      case _ => None
+    val liveAttack = state.phase match
+      case MatchPhase.InPlay(_) => remainingAttack
+      case _ => None
+    Step(state.copy(clock = state.clock.copy(elapsed = elapsed), attackClock = liveAttack), events.result(),
+      Inputs(flightInputs, touching.result(), contacts, shots, passTarget, shotUntil))
 
   private def contactInitiative(state: MatchState, first: Athlete, second: Athlete, relative: Vec3,
       contacts: Map[AthleteId, ContactAttempt]): (Athlete, Athlete, ContactKind) =

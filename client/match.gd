@@ -31,6 +31,7 @@ var _home_holds_ball := false
 var _match_claimed := false
 var _throw_power := 80.0
 var _last_tick := -1
+var _ruling := ""
 
 
 func _ready() -> void:
@@ -65,7 +66,8 @@ func _process(delta: float) -> void:
 	if read_keyboard and not _spectating and not _match_claimed:
 		if _home_holds_ball:
 			shot_guide.rotate_aim(_axis(KEY_RIGHT, KEY_LEFT), _axis(KEY_UP, KEY_DOWN), delta)
-		_read_flight_input()
+		if current_state.get("phase", {}).has("InPlay"):
+			_read_flight_input()
 	var weight := 1.0 - exp(-20.0 * delta)
 	for id: String in _locations:
 		var avatar: Node3D = _roster[id]
@@ -178,6 +180,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 	if _spectating:
 		return
+	if current_state.get("phase", {}).has("Penalty") and event.physical_keycode not in [KEY_F, KEY_Q]:
+		return
 	match event.physical_keycode:
 		KEY_E:
 			api.control({"Catch": {"target": "Quaffle"}})
@@ -225,6 +229,11 @@ func _apply_frame(frame: Dictionary) -> void:
 		return
 	_last_tick = tick
 	current_state = frame["state"]
+	_ruling = ""
+	for event: Dictionary in frame.get("events", []):
+		var result := _penalty_result(event)
+		if not result.is_empty():
+			_ruling = result
 	var players: Array = current_state["setup"]["players"]
 	_spectating = not players.is_empty() and players.all(func(player: Dictionary) -> bool:
 		return player["kind"] == "Computer")
@@ -274,7 +283,20 @@ func _reset_aim(flight: Dictionary) -> void:
 
 
 func _quaffle() -> Dictionary:
-	return current_state.get("phase", {}).get("InPlay", {}).get("balls", {}).get("quaffle", {})
+	var phase: Dictionary = current_state.get("phase", {})
+	return phase.get("InPlay", phase.get("Penalty", {})).get("balls", {}).get("quaffle", {})
+
+
+func _penalty_result(event: Dictionary) -> String:
+	if event.has("PenaltyScored"):
+		return "罚球命中"
+	if event.has("PenaltyBlocked"):
+		return "罚球被封堵"
+	if event.has("PenaltyExpired"):
+		return "罚球出手超时"
+	if event.has("PenaltyMissed"):
+		return "罚球未中"
+	return ""
 
 
 func _update_ball(weight: float) -> void:
@@ -306,6 +328,10 @@ func _update_hud() -> void:
 	_score.text = caption % [
 		score["home"], score["away"], floori(seconds / 60.0), seconds % 60
 	]
+	var attack = current_state.get("attackClock")
+	if attack != null:
+		var team := "绿队" if attack["side"] == "Home" else "蓝队"
+		_score.text += "  ·  %s进攻 %d 秒" % [team, ceili(attack["remainingTicks"] / 20.0)]
 	if _match_claimed:
 		_status.text = "此场比赛由另一个账号开启"
 		return
@@ -313,9 +339,31 @@ func _update_hud() -> void:
 	if phase.has("Ready"):
 		_status.text = "按 Enter 开赛"
 	elif phase.has("RestartPending"):
-		_status.text = "比赛暂停，即将重新开球"
+		var restart: Dictionary = phase["RestartPending"]["restart"]
+		if restart.has("PenaltyThrow"):
+			_status.text = "犯规，准备定点罚球"
+		elif restart.has("FreePossession"):
+			_status.text = "犯规，受犯规方持球恢复"
+		elif restart.has("TeamPossession"):
+			var after: Dictionary = restart["TeamPossession"]["after"]
+			if after.has("AttackExpired"):
+				_status.text = "进攻超时，球权交给对方"
+			elif after.has("QuaffleGoal"):
+				_status.text = "进球，失分方持球恢复"
+			else:
+				_status.text = _penalty_result(after)
+		else:
+			_status.text = "比赛暂停，即将恢复球权"
 	elif phase.has("Finished"):
-		_status.text = "比赛结束"
+		_status.text = "比赛结束" if _ruling.is_empty() else "比赛结束  ·  " + _ruling
+	elif phase.has("Penalty"):
+		var penalty: Dictionary = phase["Penalty"]
+		if _quaffle().has("Free"):
+			_status.text = "罚球飞行中"
+		else:
+			var remaining := ceili(penalty["remainingTicks"] / 20.0)
+			var team := "绿队" if penalty["side"] == "Home" else "蓝队"
+			_status.text = "你来罚球  ·  右键瞄准，F 或左键出手  ·  %d 秒" % remaining if _home_holds_ball else "%s罚球  ·  %d 秒" % [team, remaining]
 	elif _spectating:
 		var holder := int(_quaffle().get("HeldBy", {}).get("athlete", -1))
 		if holder < 0:
