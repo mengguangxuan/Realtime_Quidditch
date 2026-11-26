@@ -44,7 +44,8 @@ final class MatchRoutes(session: MatchSession, database: Option[Path] = None, lo
         val smallRoster = MatchSession.demoCards(available, 2)
         val lineups = MatchSession.demoTeamSizes.map { size =>
           val slots = (0 until size).map(index => MatchSimulation.startingSlot(Side.Home, index, size))
-          size.toString -> Json.obj("cards" -> MatchSession.demoCards(available, size).asJson, "slots" -> slots.asJson)
+          size.toString -> Json.obj("cards" -> MatchSession.demoCards(available, size).asJson, "slots" -> slots.asJson,
+            "keepers" -> Side.values.flatMap(side => MatchSession.demoKeeper(side, size)).toList.asJson)
         }
         val pitch = Pitch.alpine
         val smallSlots = smallRoster.count(_.side == Side.Home)

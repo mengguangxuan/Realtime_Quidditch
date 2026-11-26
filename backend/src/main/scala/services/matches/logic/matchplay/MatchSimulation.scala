@@ -106,7 +106,9 @@ private[matches] object MatchSimulation:
       case Restart.PenaltyThrow(side, foul) =>
         val who = foul.victim
         val defense = MatchRules.opponent(side)
-        val defender = receiver(defense)
+        val defender = state.setup.roster.find(athlete =>
+          athlete.side == defense && state.setup.roles(athlete.id) == AthleteRole.Keeper).map(_.id)
+          .getOrElse(receiver(defense))
         val placed = formation(state.setup.roster)
         val athletes = placed
           .updated(who, place(placed(who), rules.penaltySpot(side), initialAthlete(side).flight.facing))

@@ -3,7 +3,8 @@ extends Node3D
 const PITCH := preload("res://assets/pitch.glb")
 const RiderAssets := preload("res://rider_assets.gd")
 const ShotGuide := preload("res://shot_guide.gd")
-const SPECTATOR_DIRECTION := Vector3(0, 0.8, 0.6)
+const SPECTATOR_DIRECTION := Vector3(0, 0.5, 0.8660254)
+const SPECTATOR_FOV := 55.0
 const SPECTATOR_HOME := Color("#ff9b89")
 const SPECTATOR_AWAY := Color("#9cdbff")
 const SPECTATOR_BALL := Color("#ffba43")
@@ -31,6 +32,10 @@ var _controls: Label
 var _spectator_overlay: Control
 var _spectator_hint: Label
 var _follow_ball := false
+var _show_spectator_names := false
+var _spectator_camera_ready := false
+var _spectator_distance := 0.0
+var _spectator_target := Vector3.ZERO
 var _spectator_zoom := 1.0
 var _reticle: Control
 var _aiming := false
@@ -140,27 +145,69 @@ func _update_camera(delta: float) -> void:
 
 func _update_spectator_camera(delta: float) -> void:
 	var view_up := SPECTATOR_DIRECTION.cross(Vector3.RIGHT)
-	# Fit the riders on the camera plane, so width and altitude both count.
 	var first: Node3D = _roster[_selected_id]
 	var bounds := Rect2(first.position.x, first.position.dot(view_up), 0, 0)
+	var points: Array[Vector3] = []
 	for rider: Node3D in _roster.values():
-		bounds = bounds.expand(Vector2(rider.position.x, rider.position.dot(view_up)))
+		points.append(rider.position)
 	if _ball.visible:
-		bounds = bounds.expand(Vector2(_ball.position.x, _ball.position.dot(view_up)))
+		points.append(_ball.position)
+	var min_depth := first.position.dot(SPECTATOR_DIRECTION)
+	var max_depth := min_depth
+	for point in points:
+		bounds = bounds.expand(Vector2(point.x, point.dot(view_up)))
+		var depth := point.dot(SPECTATOR_DIRECTION)
+		min_depth = minf(min_depth, depth)
+		max_depth = maxf(max_depth, depth)
 	var center := bounds.get_center()
-	var target := _ball.position if _follow_ball else Vector3.RIGHT * center.x + view_up * center.y
+	var center_depth := (min_depth + max_depth) * 0.5
+	var target := Vector3.RIGHT * center.x + view_up * center.y + SPECTATOR_DIRECTION * center_depth
 	var viewport := get_viewport().get_visible_rect().size
 	var aspect := viewport.x / maxf(viewport.y, 1)
-	var overview_size := maxf(18.0, maxf(bounds.size.x / (0.78 * aspect), bounds.size.y / 0.65))
-	var vertical_size := minf(22.0, overview_size * 0.6) if _follow_ball else overview_size
-	var weight := 1.0 if _camera.projection != Camera3D.PROJECTION_ORTHOGONAL else 1.0 - exp(-9.0 * delta)
-	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-	_camera.position = _camera.position.lerp(target + SPECTATOR_DIRECTION * 145, weight)
-	_camera.look_at(_camera.position - SPECTATOR_DIRECTION)
-	_camera.size = lerpf(_camera.size, vertical_size * _spectator_zoom, weight)
+	var half_view := tan(deg_to_rad(SPECTATOR_FOV * 0.5))
+	var distance := 15.0
+	for point in points:
+		var offset := point - target
+		var required := maxf(absf(offset.x) / (half_view * aspect * 0.8),
+			absf(offset.dot(view_up)) / (half_view * 0.7))
+		distance = maxf(distance, offset.dot(SPECTATOR_DIRECTION) + required + 2.0)
+	if _follow_ball:
+		target = _ball.position
+		distance = clampf(distance * 0.62, 9.0, 23.0)
+	var weight := 1.0 - exp(-8.0 * delta) if _spectator_camera_ready else 1.0
+	_spectator_camera_ready = true
+	var target_distance := distance * _spectator_zoom
+	_spectator_distance = lerpf(_spectator_distance, target_distance, weight)
+	_spectator_target = _spectator_target.lerp(target, weight)
+	_camera.position = _spectator_target + SPECTATOR_DIRECTION * _spectator_distance
+	_camera.look_at(_spectator_target)
+	_camera.fov = SPECTATOR_FOV
 
 
 func _draw_spectator_overlay() -> void:
+	if _show_spectator_names:
+		_draw_spectator_names()
+	if _ball.visible and _camera.is_position_in_frustum(_ball.global_position):
+		var point := _camera.unproject_position(_ball.global_position)
+		_spectator_overlay.draw_circle(point, 8, TAG_BACKGROUND, false, 2, true)
+		_spectator_overlay.draw_circle(point, 7, SPECTATOR_BALL, false, 2, true)
+	var home_name := "格兰芬多" if _home_lineup.size() == 7 else "主队"
+	var away_name := "巴塞罗那" if _home_lineup.size() == 7 else "客队"
+	var font := ThemeDB.fallback_font
+	var baseline := _spectator_overlay.size.y - 22
+	var away_width := font.get_string_size(away_name, HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE).x
+	_spectator_overlay.draw_string_outline(font, Vector2(22, baseline), home_name,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE, 6, TAG_BACKGROUND)
+	_spectator_overlay.draw_string(font, Vector2(22, baseline), home_name,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE, SPECTATOR_HOME)
+	var away_position := Vector2(_spectator_overlay.size.x - 22 - away_width, baseline)
+	_spectator_overlay.draw_string_outline(font, away_position, away_name,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE, 6, TAG_BACKGROUND)
+	_spectator_overlay.draw_string(font, away_position, away_name,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE, SPECTATOR_AWAY)
+
+
+func _draw_spectator_names() -> void:
 	var area := Rect2(Vector2(12, 72), _spectator_overlay.size - Vector2(24, 114))
 	if area.size.x <= 0 or area.size.y <= 0:
 		return
@@ -190,23 +237,6 @@ func _draw_spectator_overlay() -> void:
 			_spectator_overlay.draw_rect(plate, SPECTATOR_BALL, false, 2)
 		_spectator_overlay.draw_string(font, plate.position + Vector2(9, 17), _names[id],
 			HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE, accent)
-	if _ball.visible and _camera.is_position_in_frustum(_ball.global_position):
-		var point := _camera.unproject_position(_ball.global_position)
-		_spectator_overlay.draw_circle(point, 8, TAG_BACKGROUND, false, 2, true)
-		_spectator_overlay.draw_circle(point, 7, SPECTATOR_BALL, false, 2, true)
-	var home_name := "格兰芬多" if _home_lineup.size() == 7 else "主队"
-	var away_name := "巴塞罗那" if _home_lineup.size() == 7 else "客队"
-	var baseline := _spectator_overlay.size.y - 22
-	var away_width := font.get_string_size(away_name, HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE).x
-	_spectator_overlay.draw_string_outline(font, Vector2(22, baseline), home_name,
-		HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE, 6, TAG_BACKGROUND)
-	_spectator_overlay.draw_string(font, Vector2(22, baseline), home_name,
-		HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE, SPECTATOR_HOME)
-	var away_position := Vector2(_spectator_overlay.size.x - 22 - away_width, baseline)
-	_spectator_overlay.draw_string_outline(font, away_position, away_name,
-		HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE, 6, TAG_BACKGROUND)
-	_spectator_overlay.draw_string(font, away_position, away_name,
-		HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE, SPECTATOR_AWAY)
 
 
 func _spectator_nameplates(points: Dictionary, area: Rect2, holder: String) -> Dictionary:
@@ -298,6 +328,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		if event.physical_keycode == KEY_TAB:
 			_follow_ball = not _follow_ball
 			_spectator_zoom = 1.0
+		elif event.physical_keycode == KEY_N:
+			_show_spectator_names = not _show_spectator_names
 		return
 	if current_state.get("phase", {}).has("Penalty") and event.physical_keycode not in [KEY_F, KEY_Q]:
 		return
@@ -401,7 +433,7 @@ func _apply_frame(frame: Dictionary) -> void:
 		if athlete["side"] == "Home":
 			_home_lineup.append(id)
 		if not _roster.has(id):
-			_create_rider(id, _position(flight["position"]["value"]), athlete["name"], lineup.size() > 2)
+			_create_rider(id, _position(flight["position"]["value"]), athlete["name"], lineup.size())
 		var label: Label3D = _labels[id]
 		label.visible = not _spectating and lineup.size() > 2
 		label.modulate = Color.GOLD if id == _selected_id and not _spectating else Color.WHITE
@@ -473,7 +505,8 @@ func _update_hud() -> void:
 	if _spectating:
 		var view := "跟球" if _follow_ball else "全场"
 		var other_view := "全场" if _follow_ball else "跟球"
-		_spectator_hint.text = "%s视角   ·   Tab 切换%s   ·   滚轮缩放" % [view, other_view]
+		var names := "隐藏姓名" if _show_spectator_names else "显示姓名"
+		_spectator_hint.text = "%s视角   ·   Tab 切换%s   ·   滚轮缩放   ·   N %s" % [view, other_view, names]
 	var home := "格兰芬多" if named_teams else "绿队"
 	var away := "巴塞罗那" if named_teams else "蓝队"
 	var home_caption := home + "电脑" if _spectating else (home if named_teams else "你")
@@ -541,14 +574,18 @@ func _update_hud() -> void:
 			_status.text = "追上橙色鬼飞球后按 E 接球"
 
 
-func _create_rider(id: String, initial: Vector3, rider_name: String, show_name: bool) -> void:
+func _create_rider(id: String, initial: Vector3, rider_name: String, roster_size: int) -> void:
 	var avatar := Node3D.new()
 	add_child(avatar)
-	var visual: Node3D = RiderAssets.create(int(id))
+	var home: bool = _sides[id] == "Home"
+	var kit := Color.TRANSPARENT
+	if roster_size == 14:
+		kit = RiderAssets.HOME_KIT if home else RiderAssets.AWAY_KIT
+	var keeper: bool = current_state["setup"]["roles"].get(id) == "Keeper"
+	var visual: Node3D = RiderAssets.create(int(id), kit, keeper)
 	avatar.add_child(visual)
 	_rider_visuals[id] = visual
 	avatar.position = initial
-	var home: bool = _sides[id] == "Home"
 	avatar.rotation.y = PI / 2.0 if home else -PI / 2.0
 	var badge := _sphere(0.20, Color(0.36, 1.0, 0.57) if home else Color(0.30, 0.66, 1.0), 1.0)
 	badge.visible = not _spectating
@@ -559,7 +596,7 @@ func _create_rider(id: String, initial: Vector3, rider_name: String, show_name: 
 	label.position = Vector3(0, 1.95, 0)
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.pixel_size = 0.005
-	label.visible = show_name
+	label.visible = not _spectating and roster_size > 2
 	avatar.add_child(label)
 	_labels[id] = label
 	_roster[id] = avatar

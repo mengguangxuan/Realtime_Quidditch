@@ -15,7 +15,9 @@ private[matches] object TeamDefense:
       case QuaffleState.Free(_) => Map.empty
       case QuaffleState.HeldBy(carrier) =>
         val side = MatchRules.opponent(state.setup.roster.find(_.id == carrier).get.side)
-        val defending = state.setup.roster.filter(_.side == side)
+        val team = state.setup.roster.filter(_.side == side)
+        val defending = team.filter(athlete => state.setup.roles(athlete.id) != AthleteRole.Keeper)
+        if defending.isEmpty then return Map.empty
         val ball = state.athletes(carrier).flight.position.value
         val distances = defending.map(athlete =>
           athlete -> (state.athletes(athlete.id).flight.position.value - ball).length)
@@ -23,24 +25,26 @@ private[matches] object TeamDefense:
         val marker = distances.find { case (athlete, gap) =>
           previous.contains(athlete.id) && gap <= distance + 3
         }.fold(closest)(_._1)
-        distribute(state, carrier, ball, marker, defending.filterNot(_.id == marker.id))
+        val goalClearance = if team.size > defending.size then taskSpacing else 0.0
+        distribute(state, carrier, ball, marker, defending.filterNot(_.id == marker.id), goalClearance)
 
   def marker(tasks: Map[AthleteId, Task]): Option[AthleteId] =
     tasks.collectFirst { case (id, Task.MarkCarrier) => id }
 
   private def distribute(state: MatchState, carrier: AthleteId, ball: Vec3, marker: Athlete,
-      support: List[Athlete]): Map[AthleteId, Task] =
+      support: List[Athlete], goalClearance: Double): Map[AthleteId, Task] =
     val goalX = if marker.side == Side.Home then -Pitch.alpine.goalPlaneX else Pitch.alpine.goalPlaneX
     val wing = if ball.y >= 0 then -6 else 6
     val lanes = state.setup.tacticsFor(marker.side).defense match
       case DefensiveApproach.Pressure if support.size >= 2 =>
-        val firstLaneDepth = coverDepth((support.size - 1) / 2) + taskSpacing
+        val firstLaneDepth = coverDepth((support.size - 1) / 2) + taskSpacing + goalClearance
         passingLanes(state, carrier, ball, marker.side, goalX, firstLaneDepth, math.min(2, support.size / 2))
       case DefensiveApproach.Pressure | DefensiveApproach.Cover => Vector.empty
     val zones = Vector.tabulate(support.size - lanes.size) { index =>
       val row = index / 2
       val lane = if index % 2 == 0 then wing else -wing
-      val target = FlightRules.contain(Vec3(goalX - math.signum(goalX) * coverDepth(row), lane, 10 + row * 3), 1.5)
+      val depth = coverDepth(row) + goalClearance
+      val target = FlightRules.contain(Vec3(goalX - math.signum(goalX) * depth, lane, 10 + row * 3), 1.5)
       Task.CoverZone(Position(target)) -> target
     }
     val (_, assignments) = (lanes ++ zones).foldLeft((support, Map[AthleteId, Task](marker.id -> Task.MarkCarrier))) {

@@ -30,13 +30,26 @@ object MatchChecks:
     val sevenAside = MatchSession.demo(cards, computerOpponent = true, teamSize = 7).latest.state
     val sevenSetup = sevenAside.setup
     assert(sevenSetup.roster.groupBy(_.side).values.forall(_.size == 7))
-    assert(sevenSetup.roster.filter(_.side == Side.Home).map(_.id.value) == List(1, 3, 5, 6, 7, 8, 9))
-    assert(sevenSetup.roster.filter(_.side == Side.Away).map(_.id.value) == (12 to 18).toList)
+    assert(sevenSetup.roster.filter(_.side == Side.Home).map(_.id.value) == List(1, 5, 6, 7, 8, 9, 3))
+    assert(sevenSetup.roster.filter(_.side == Side.Away).map(_.id.value) == List(12, 14, 15, 16, 17, 18, 13))
+    assert(sevenSetup.roles.collect { case (id, AthleteRole.Keeper) => id.value }.toSet == Set(3, 13))
+    val goalieId = AthleteId(3)
+    val goalie = sevenSetup.roster.find(_.id == goalieId).get
+    assert(sevenAside.athletes(goalieId).flight.position.value.x == -41)
+    val kickoffBall = QuaffleRules.free(Vec3(0, 0, 7))
+    val guard = DefensePlanner.keeperAgainstFreeBall(sevenAside, goalie, kickoffBall.motion, true)
+    assert(guard == DefensePlanner.Decision.HoldGoal(Position(Vec3(-41, 0, 10))))
+    val closeBall = QuaffleRules.free(sevenAside.athletes(goalieId).flight.position.value)
+    assert(DefensePlanner.keeperAgainstFreeBall(sevenAside, goalie, closeBall.motion, true) ==
+      DefensePlanner.Decision.Intercept(DefensePlanner.PredictedBall(PlayTick(0), closeBall.motion),
+        DefensePlanner.InterceptMethod.Catch))
+    val opposingCarrier = AthleteId(12)
+    assert(!TeamDefense.plan(sevenAside, QuaffleState.HeldBy(opposingCarrier), Some(goalieId)).contains(goalieId))
     assert(sevenSetup.players.count(_.kind == PlayerKind.Human) == 1)
     assert(MatchSimulation.startingPositionsValid(sevenSetup.roster, Map.empty).isRight)
     assert(sevenAside.athletes.values.map(_.flight.position).toSet.size == 14)
     val ron = MatchSession.demoSetup(cards, true, false, 7, Some(AthleteId(3))).toOption.get
-    assert(ron.roster.head.id == AthleteId(3))
+    assert(ron.assignments.find(_.player == PlayerId("home")).get.athlete == goalieId)
     assert(MatchSession.demoSetup(cards, true, false, 7, Some(AthleteId(10))).isLeft)
     assert(roster.map(_.id).distinct.size == 4 && roster.map(_.ratings).distinct.size == 4)
     assert(roster.count(_.side == Side.Home) == 2 && roster.count(_.side == Side.Away) == 2)

@@ -29,6 +29,24 @@ private[matches] object DefensePlanner:
   private def ownGoal(athlete: Athlete): Double =
     if athlete.side == Side.Home then -pitch.goalPlaneX else pitch.goalPlaneX
 
+  def guardGoal(athlete: Athlete, ball: Vec3): Decision =
+    val goalX = ownGoal(athlete)
+    val nearGoal = math.abs(ball.x - goalX) <= 24
+    val lateral = if nearGoal then clamp(ball.y * .42, -6, 6) else 0.0
+    val height = if nearGoal then clamp(ball.z, 7.5, 11.5) else 10.0
+    Decision.HoldGoal(Position(Vec3(goalX - math.signum(goalX) * 3, lateral, height)))
+
+  def keeperAgainstFreeBall(state: MatchState, athlete: Athlete, ball: BallMotion, canCatch: Boolean): Decision =
+    def inRange(point: Vec3): Boolean =
+      math.abs(point.x - ownGoal(athlete)) <= 17 && math.abs(point.y) <= 13
+    if inRange(ball.position.value) then againstFreeBall(state, athlete, ball, canCatch) match
+      case Decision.PursueLoose(target) if !inRange(target.value) =>
+        guardGoal(athlete, ball.position.value)
+      case Decision.Intercept(sample, _) if !inRange(interceptPosition(sample)) =>
+        guardGoal(athlete, ball.position.value)
+      case decision => decision
+    else guardGoal(athlete, ball.position.value)
+
   def againstCarrier(state: MatchState, athlete: Athlete, carrier: AthleteId): Decision =
     val defender = state.athletes(athlete.id).flight
     val opponent = state.athletes(carrier).flight

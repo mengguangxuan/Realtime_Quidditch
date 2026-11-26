@@ -26,6 +26,7 @@ var _formation_status := Label.new()
 var _positioning: Dictionary = {}
 var _lineups: Dictionary = {}
 var _slots: Array = []
+var _keepers: Array = []
 var _formation_edits: Dictionary = {}
 var _opening_players: Array[Dictionary] = []
 var _cards: Array = []
@@ -115,6 +116,7 @@ func _mode_changed(_index: int) -> void:
 	var lineup: Dictionary = _lineups[str(team_size)]
 	_cards = lineup["cards"]
 	_slots = lineup["slots"]
+	_keepers = lineup.get("keepers", [])
 	_tactics_panel.visible = team_size > 1
 	_home_caption.text = "选择格兰芬多首位球员" if mode["watch"] else "选择格兰芬多首发操控球员"
 	_away_caption.text = "查看巴塞罗那球员" if team_size == 7 else "查看斯莱特林球员"
@@ -149,21 +151,32 @@ func _refresh_opening_players() -> void:
 	if _chosen.is_empty() or _positioning.is_empty():
 		_play.disabled = _starting or _chosen.is_empty()
 		return
-	_opening_players.append(_chosen)
+	if not _keepers.has(_chosen["id"]):
+		_opening_players.append(_chosen)
 	var team_size := int(_mode()["teamSize"])
+	var keeper: Dictionary = {}
 	for card: Dictionary in _cards:
 		if _opening_players.size() >= team_size:
 			break
-		if card["side"] == "Home" and card["id"] != _chosen["id"]:
+		if card["side"] != "Home":
+			continue
+		if _keepers.has(card["id"]):
+			keeper = card
+		elif card["id"] != _chosen["id"]:
 			_opening_players.append(card)
+	if not keeper.is_empty():
+		_opening_players.append(keeper)
 	for card: Dictionary in _opening_players:
-		_formation_player.add_item(card["name"])
+		_formation_player.add_item(card["name"] + (" · 守门员" if _keepers.has(card["id"]) else ""))
 	if _opening_players.size() < team_size:
 		_formation_status.text = "格兰芬多球员卡不足。"
 		_play.disabled = true
 		_formation_pitch.queue_redraw()
 		return
-	_formation_player.select(0)
+	for index in _opening_players.size():
+		if _opening_players[index]["id"] == _chosen["id"]:
+			_formation_player.select(index)
+			break
 	var valid := _valid_formation()
 	_formation_status.text = "选球员后，点击左侧可用区域摆位。" if valid else "球员站位太近，请调整或恢复默认。"
 	_play.disabled = _starting or not valid
@@ -337,7 +350,10 @@ func _show_card(card: Dictionary) -> void:
 	]
 	for child in _preview.get_children():
 		child.queue_free()
-	_preview.add_child(RiderAssets.create(int(card["id"])))
+	var kit := Color.TRANSPARENT
+	if int(_mode()["teamSize"]) == 7:
+		kit = RiderAssets.HOME_KIT if card["side"] == "Home" else RiderAssets.AWAY_KIT
+	_preview.add_child(RiderAssets.create(int(card["id"]), kit, _keepers.has(card["id"])))
 
 
 func _start() -> void:

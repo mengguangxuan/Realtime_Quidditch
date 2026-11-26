@@ -142,9 +142,14 @@ func _run() -> void:
 		if model is MeshInstance3D:
 			meshes.append(model)
 		if not meshes.any(func(mesh: MeshInstance3D) -> bool:
-			var material := mesh.get_active_material(0) as BaseMaterial3D
-			return material != null and material.albedo_texture != null):
-			_fail("A rider was imported without its texture")
+			var material := mesh.get_active_material(0)
+			if team_size != 7:
+				return material is BaseMaterial3D and material.albedo_texture != null
+			var keeper: bool = game.current_state["setup"]["roles"][id] == "Keeper"
+			var kit := RiderAssets.HOME_KIT if game._sides[id] == "Home" else RiderAssets.AWAY_KIT
+			return (material is ShaderMaterial and material.get_shader_parameter("original_texture") != null
+				and material.get_shader_parameter("kit_color") == kit and material.get_shader_parameter("keeper") == keeper)):
+			_fail("A rider had the wrong team kit or was imported without its texture")
 			return
 	if not await _check_match_owner():
 		return
@@ -309,8 +314,9 @@ func _check_seven_aside_controls() -> void:
 	if players.filter(func(player: Dictionary) -> bool: return player["kind"] == "Human").size() != 1:
 		_fail("The 7v7 human-vs-CPU match should have exactly one human player")
 		return
+	var start := lineup.find(game._selected_id)
 	for index in range(1, lineup.size() + 1):
-		var next := lineup[index % lineup.size()]
+		var next := lineup[(start + index) % lineup.size()]
 		game.switch_teammate()
 		if not await _until(func() -> bool: return game._selected_id == next, 2.0):
 			_fail("Could not cycle through the seven starting riders")
@@ -362,21 +368,31 @@ func _check_seven_aside_spectator(camera: Camera3D) -> bool:
 		):
 			_fail("Spectator nameplates overlapped or left the visible area")
 			return false
-	var overview := camera.size
+	if camera.projection != Camera3D.PROJECTION_PERSPECTIVE or game._show_spectator_names:
+		_fail("Spectator should start in perspective with nameplates hidden")
+		return false
+	var overview: float = game._spectator_distance
 	game.read_keyboard = true
+	var names := InputEventKey.new()
+	names.physical_keycode = KEY_N
+	names.pressed = true
+	game._unhandled_key_input(names)
+	if not game._show_spectator_names:
+		_fail("N did not reveal the optional nameplates")
+		return false
 	var tab := InputEventKey.new()
 	tab.physical_keycode = KEY_TAB
 	tab.pressed = true
 	game._unhandled_key_input(tab)
-	if not await _until(func() -> bool: return game._follow_ball and camera.size < overview * 0.8, 2.0):
+	if not await _until(func() -> bool: return game._follow_ball and game._spectator_distance < overview * 0.8, 2.0):
 		_fail("Tab did not move to the closer ball-follow camera")
 		return false
 	var wheel := InputEventMouseButton.new()
 	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
 	wheel.pressed = true
-	var follow_size := camera.size
+	var follow_distance: float = game._spectator_distance
 	game._unhandled_input(wheel)
-	if not await _until(func() -> bool: return game._spectator_zoom < 1.0 and camera.size < follow_size * 0.94, 2.0):
+	if not await _until(func() -> bool: return game._spectator_zoom < 1.0 and game._spectator_distance < follow_distance * 0.94, 2.0):
 		_fail("The mouse wheel did not zoom the spectator camera")
 		return false
 	game._unhandled_key_input(tab)
