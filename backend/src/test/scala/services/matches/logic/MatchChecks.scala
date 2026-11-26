@@ -123,6 +123,7 @@ object MatchChecks:
     checkShotsAndBlocks(demo)
     checkCompetitionRules(demo)
     checkDefensePlanning(demo)
+    checkCoordinatedDefense()
     checkTeamTactics()
     val solo = MatchSession.demo(cards, computerOpponent = true, shotSeed = 42)
     assert(solo.start().isRight)
@@ -388,6 +389,76 @@ object MatchChecks:
       case _ => false
     })
     assert(saved.exists(_.state.score == initial.score))
+
+  private def checkCoordinatedDefense(): Unit =
+    val initial = MatchSession.demo(cards, teamSize = 2, computerHome = true, computerOpponent = true).latest.state
+    val first = initial.setup.roster.head.id
+    val second = initial.setup.roster.find(athlete => athlete.side == Side.Home && athlete.id != first).get.id
+    val approaching = FlightState(Position(Vec3(-3, 0, 10)), Velocity(Vec3(12, 0, 0)), Direction.east)
+    val teammate = FlightState(Position(Vec3(3, 0, 10)), Velocity(Vec3(-12, 0, 0)), Direction.west)
+    val headOn = FlightInput(AxisInput(1), AxisInput(0), AxisInput(0), false)
+    assert(TeamSpacing.steer(first, approaching, List(second -> teammate), headOn).strafe.value != 0)
+
+    for side <- Side.values do
+      val defending = initial.setup.roster.filter(_.side == side)
+      val carrier = initial.setup.roster.find(_.side != side).get
+      val sign = if side == Side.Home then -1 else 1
+      def placed(athlete: Athlete, point: Vec3): AthleteState =
+        initial.athletes(athlete.id).copy(flight = FlightState(Position(point), Velocity(Vec3.zero),
+          if sign > 0 then Direction.east else Direction.west))
+      val positions = initial.athletes ++ Map(
+        defending.head.id -> placed(defending.head, Vec3(39.7 * sign, 1.20, 10)),
+        defending.last.id -> placed(defending.last, Vec3(39.71 * sign, 1.21, 10)),
+        carrier.id -> placed(carrier, Vec3(1.9 * sign, 7.05, 10))
+      )
+      val balls = MatchBalls(QuaffleState.HeldBy(carrier.id), SpecialBalls(Map.empty, None))
+      val start = initial.copy(phase = MatchPhase.InPlay(balls), athletes = positions)
+      val lead = DefensePlanner.primaryDefender(start, balls.quaffle, None).get
+      val partner = defending.find(_.id != lead).get
+      assert(DefensePlanner.primaryDefender(start, balls.quaffle, Some(partner.id)).contains(partner.id))
+      val leadAthlete = defending.find(_.id == lead).get
+      assert(DefensePlanner.againstCarrier(start, leadAthlete, carrier.id, hasCover = true)
+        .isInstanceOf[DefensePlanner.Decision.Press])
+
+      val assignments = start.controls.filter(assignment => defending.exists(_.id == assignment.athlete))
+      val end = (1 to 30).foldLeft(MatchSimulation.Step(start, Nil, MatchSimulation.Inputs())) { (step, _) =>
+        val defender = DefensePlanner.primaryDefender(step.state, balls.quaffle, step.inputs.primaryDefender)
+        val commands = assignments.flatMap(assignment =>
+          ComputerPilot.controls(step.state, balls, assignment, primaryDefender = defender)
+            .map(assignment.athlete -> _)).toVector
+        MatchSimulation.advance(step.state, balls, commands, step.inputs.copy(primaryDefender = defender), 42)
+      }
+      val marker = end.inputs.primaryDefender.get
+      val covering = defending.find(_.id != marker).get.id
+      val markerPosition = end.state.athletes(marker).flight.position.value
+      val coverPosition = end.state.athletes(covering).flight.position.value
+      assert((markerPosition - coverPosition).length > 2, s"$side did not separate: $markerPosition, $coverPosition")
+      assert(math.abs(markerPosition.x) + 3 < math.abs(coverPosition.x),
+        s"$side did not separate pressure from cover: $markerPosition, $coverPosition")
+
+    val watch = MatchSession.demo(cards, teamSize = 2, computerHome = true, computerOpponent = true, shotSeed = 42)
+    assert(watch.start().isRight)
+    val sides = initial.setup.roster.map(athlete => athlete.id -> athlete.side).toMap
+    var closeFrames = 0
+    var longest = 0
+    val frames = Iterator.continually(watch.advance()).take(4000)
+      .takeWhile(frame => !frame.state.phase.isInstanceOf[MatchPhase.Finished])
+    frames.foreach { frame =>
+      val defending = frame.state.phase match
+        case MatchPhase.InPlay(MatchBalls(QuaffleState.HeldBy(holder), _)) =>
+          initial.setup.roster.filter(_.side != sides(holder))
+        case _ => Nil
+      val close = defending match
+        case a :: b :: Nil =>
+          val positions = frame.state.athletes
+          (positions(a.id).flight.position.value - positions(b.id).flight.position.value).length < 2
+        case _ => false
+      closeFrames = if close then closeFrames + 1 else 0
+      longest = math.max(longest, closeFrames)
+    }
+    assert(watch.latest.state.phase.isInstanceOf[MatchPhase.Finished])
+    assert(longest <= MatchClock.ticksPerSecond, s"Defenders stayed within 2 meters for $longest ticks")
+    println(s"CPU vs CPU 2v2 (seed 42): longest defended overlap under 2 m was $longest ticks")
 
   private def checkTeamTactics(): Unit =
     val setup = MatchSession.demo(cards, teamSize = 2).latest.state.setup

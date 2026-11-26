@@ -10,7 +10,7 @@ private[matches] object ComputerPilot:
       .map(direction => Control.Shoot(ShotAim(direction, ShotPower(1), None)))
 
   def controls(state: MatchState, balls: MatchBalls, assignment: ControlAssignment,
-      passTarget: Option[AthleteId] = None): List[Control] =
+      passTarget: Option[AthleteId] = None, primaryDefender: Option[AthleteId] = None): List[Control] =
     val athlete = state.setup.roster.find(_.id == assignment.athlete).get
     val flight = state.athletes(athlete.id).flight
     val position = flight.position.value
@@ -18,10 +18,12 @@ private[matches] object ComputerPilot:
     val sign = if athlete.side == Side.Home then 1 else -1
     val tactics = state.setup.tacticsFor(athlete.side)
 
-    def move(target: Vec3, sprint: Boolean = false): Control =
-      Control.Fly(DefensePlanner.flightTo(flight, target, sprint))
-
     val team = state.setup.roster.filter(_.side == athlete.side)
+    val teammates = team.filterNot(_.id == athlete.id).map(mate => mate.id -> state.athletes(mate.id).flight)
+    def move(target: Vec3, sprint: Boolean = false): Control =
+      val input = DefensePlanner.flightTo(flight, target, sprint)
+      Control.Fly(TeamSpacing.steer(athlete.id, flight, teammates, input))
+
     def nearest(point: Vec3): AthleteId =
       team.minBy(mate => (state.athletes(mate.id).flight.position.value - point).length).id
 
@@ -65,7 +67,7 @@ private[matches] object ComputerPilot:
       case QuaffleState.HeldBy(id) =>
         val carrier = state.athletes(id).flight.position.value
         if team.exists(_.id == id) then support(carrier)
-        else if nearest(carrier) == athlete.id then
-          defend(DefensePlanner.againstCarrier(state, athlete, id, tactics.defense))
-        else List(move(Vec3(-sign * 39, if carrier.y > 0 then 4 else -4, 10)))
+        else if primaryDefender.getOrElse(nearest(carrier)) == athlete.id then
+          defend(DefensePlanner.againstCarrier(state, athlete, id, tactics.defense, hasCover = teammates.nonEmpty))
+        else List(move(DefensePlanner.coverBehind(athlete, carrier)))
     decisions.filter(control => assignment.allowedControls.contains(control.kind))

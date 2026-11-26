@@ -19,7 +19,8 @@ private[matches] object MatchSimulation:
       contacts: Map[AthleteId, ContactAttempt] = Map.empty,
       shots: Long = 0,
       passTarget: Option[(AthleteId, Long)] = None,
-      shotUntil: Option[Long] = None
+      shotUntil: Option[Long] = None,
+      primaryDefender: Option[AthleteId] = None
   )
 
   final case class Step(state: MatchState, events: List[MatchEvent], inputs: Inputs)
@@ -268,7 +269,7 @@ private[matches] object MatchSimulation:
       case MatchPhase.InPlay(_) => remainingAttack
       case _ => None
     Step(state.copy(clock = state.clock.copy(elapsed = elapsed), attackClock = liveAttack), events.result(),
-      Inputs(flightInputs, touching.result(), contacts, shots, passTarget, shotUntil))
+      Inputs(flightInputs, touching.result(), contacts, shots, passTarget, shotUntil, previous.primaryDefender))
 
   private def contactInitiative(state: MatchState, first: Athlete, second: Athlete, relative: Vec3,
       contacts: Map[AthleteId, ContactAttempt]): (Athlete, Athlete, ContactKind) =
