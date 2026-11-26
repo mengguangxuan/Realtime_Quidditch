@@ -166,10 +166,13 @@ object MatchSession:
       .fold(error => throw IllegalStateException(error), identity)
 
   val demoTeamSizes = List(1, 2, 7)
-  private val sevenAsideIds = (5 to 18).map(AthleteId(_)).toSet
+  private val expandedCards = (5 to 18).map(AthleteId(_)).toSet
+  private val sevenAsideIds = (List(1, 3) ++ (5 to 9) ++ (12 to 18)).map(AthleteId(_)).toSet
 
   private[matches] def demoCards(cards: List[Athlete], teamSize: Int): List[Athlete] =
-    cards.filter(athlete => sevenAsideIds.contains(athlete.id) == (teamSize == 7)).sortBy(_.id.value)
+    val available = if teamSize == 7 then cards.filter(athlete => sevenAsideIds.contains(athlete.id))
+      else cards.filterNot(athlete => expandedCards.contains(athlete.id))
+    available.sortBy(_.id.value)
 
   def demoSetup(cards: List[Athlete], computerOpponent: Boolean, computerHome: Boolean,
       teamSize: Int, selection: Option[AthleteId], homeTactics: TeamTactics = TeamTactics.default,

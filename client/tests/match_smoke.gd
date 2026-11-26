@@ -330,19 +330,68 @@ func _check_spectator() -> void:
 		_fail("Neither computer caught the Quaffle")
 		return
 	var camera: Camera3D = game._camera
-	for id: String in game._roster:
-		var rider: Node3D = game._roster[id]
-		if not camera.get_frustum().all(func(plane: Plane) -> bool:
-			return not plane.is_point_over(rider.position)
-		):
-			_fail("Spectator camera did not frame every rider")
-			return
+	if not _all_riders_in_view(camera):
+		_fail("Spectator camera did not frame every rider")
+		return
 	var team := "格兰芬多电脑" if game._home_lineup.size() == 7 else "绿队电脑"
 	if game._controls.visible or game._home_holds_ball or not game._score.text.contains(team):
 		_fail("Spectator HUD did not switch to computer teams")
 		return
+	if game._home_lineup.size() == 7 and not await _check_seven_aside_spectator(camera):
+		return
 	print("Godot ↔ Scala passed: CPU vs CPU, autonomous catch, spectator camera and HUD")
 	quit(0)
+
+
+func _check_seven_aside_spectator(camera: Camera3D) -> bool:
+	if not game._home_lineup.has("1") or not game._home_lineup.has("3"):
+		_fail("Harry and Ron were missing from the seven-a-side roster")
+		return false
+	var area := Rect2(Vector2(12, 72), root.get_visible_rect().size - Vector2(24, 114))
+	var crowded: Dictionary = {}
+	for id: String in game._roster:
+		crowded[id] = area.get_center()
+	var plates: Dictionary = game._spectator_nameplates(crowded, area, "1")
+	if plates.size() != 14 or plates.keys().front() != "1":
+		_fail("Packed riders lost their nameplates or the holder did not get first placement")
+		return false
+	for id: String in plates:
+		var plate: Rect2 = plates[id]
+		if not area.encloses(plate) or plates.keys().any(func(other: String) -> bool:
+			return id != other and plate.intersects(plates[other])
+		):
+			_fail("Spectator nameplates overlapped or left the visible area")
+			return false
+	var overview := camera.size
+	game.read_keyboard = true
+	var tab := InputEventKey.new()
+	tab.physical_keycode = KEY_TAB
+	tab.pressed = true
+	game._unhandled_key_input(tab)
+	if not await _until(func() -> bool: return game._follow_ball and camera.size < overview * 0.8, 2.0):
+		_fail("Tab did not move to the closer ball-follow camera")
+		return false
+	var wheel := InputEventMouseButton.new()
+	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
+	wheel.pressed = true
+	var follow_size := camera.size
+	game._unhandled_input(wheel)
+	if not await _until(func() -> bool: return game._spectator_zoom < 1.0 and camera.size < follow_size * 0.94, 2.0):
+		_fail("The mouse wheel did not zoom the spectator camera")
+		return false
+	game._unhandled_key_input(tab)
+	if not await _until(func() -> bool: return not game._follow_ball and _all_riders_in_view(camera), 2.0):
+		_fail("Tab did not restore the full-field view")
+		return false
+	game.read_keyboard = false
+	print("Verified Harry and Ron, 14 non-overlapping nameplates, Tab camera switching and wheel zoom")
+	return true
+
+
+func _all_riders_in_view(camera: Camera3D) -> bool:
+	return game._roster.values().all(func(rider: Node3D) -> bool:
+		return camera.is_position_in_frustum(rider.global_position)
+	)
 
 
 func _fly_to(target: Vector3) -> bool:

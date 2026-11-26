@@ -49,7 +49,9 @@ WHERE athlete_id = 1;
 | 3 | Ron Weasley | 格兰芬多 | 接球、短传、守门 | `Ron_Weasley_Gryffindor_1516467167167545344.glb` |
 | 4 | Vincent Crabbe | 斯莱特林 | 身体对抗、平衡、护球 | `Vincent_Crabbe_Slytherin_1516467169587666944.glb` |
 
-七人制球员卡的 ID 为 5 至 18，初始评分统一为 75。Godot 在 `client/assets/riders` 中按球员 ID 加载骑乘姿势和共用扫帚。七人制资产由 `client/tools/export_seven_aside_riders.py` 从本地模型导出，弗雷德和乔治使用同一份角色网格。
+七人制格兰芬多使用哈利、罗恩和 ID 5 至 9 的球员，巴塞罗那使用 ID 12 至 18 的球员。哈利和罗恩共享小场模式使用的球员卡，其余首发球员初始评分为 75。Godot 在 `client/assets/riders` 中按球员 ID 加载骑乘姿势和共用扫帚。
+
+观战默认显示全场。按 Tab 可切换跟球视角，滚轮缩放。球员的屏幕名牌采用队色，鬼飞球及持球者以金色标记。
 
 本地调试使用 `home` 和 `away` 两个控制者。开赛后可向 `/matches/demo/controls` 发送下面的 JSON，设置主队球员的移动输入。
 

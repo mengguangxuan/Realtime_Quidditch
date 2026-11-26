@@ -30,11 +30,14 @@ object MatchChecks:
     val sevenAside = MatchSession.demo(cards, computerOpponent = true, teamSize = 7).latest.state
     val sevenSetup = sevenAside.setup
     assert(sevenSetup.roster.groupBy(_.side).values.forall(_.size == 7))
-    assert(sevenSetup.roster.map(_.id.value).toSet == (5 to 18).toSet)
+    assert(sevenSetup.roster.filter(_.side == Side.Home).map(_.id.value) == List(1, 3, 5, 6, 7, 8, 9))
+    assert(sevenSetup.roster.filter(_.side == Side.Away).map(_.id.value) == (12 to 18).toList)
     assert(sevenSetup.players.count(_.kind == PlayerKind.Human) == 1)
     assert(MatchSimulation.startingPositionsValid(sevenSetup.roster, Map.empty).isRight)
     assert(sevenAside.athletes.values.map(_.flight.position).toSet.size == 14)
-    assert(MatchSession.demoSetup(cards, true, false, 7, Some(AthleteId(1))).isLeft)
+    val ron = MatchSession.demoSetup(cards, true, false, 7, Some(AthleteId(3))).toOption.get
+    assert(ron.roster.head.id == AthleteId(3))
+    assert(MatchSession.demoSetup(cards, true, false, 7, Some(AthleteId(10))).isLeft)
     assert(roster.map(_.id).distinct.size == 4 && roster.map(_.ratings).distinct.size == 4)
     assert(roster.count(_.side == Side.Home) == 2 && roster.count(_.side == Side.Away) == 2)
     val home = PlayerId("home")
