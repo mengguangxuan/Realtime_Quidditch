@@ -53,12 +53,13 @@ private[matches] object FlightRules:
       if bounded.z == position.z then velocity.z else 0
     )
     val staminaChange = if sprinting then -(13 - ratings.physical.endurance.value * .09) else 9.0
-    AthleteState(
-      FlightState(Position(bounded), Velocity(limitedVelocity), heading),
-      Stamina(clamp(previous.stamina.value + staminaChange * dt, 0, 100)),
-      Stability(clamp(previous.stability.value + (5 + ratings.physical.balance.value * .14) * dt, 0, 100)),
-      if bracing then MovementMode.Bracing else if sprinting then MovementMode.Sprinting else MovementMode.Normal
+    val moved = previous.copy(
+      flight = FlightState(Position(bounded), Velocity(limitedVelocity), heading),
+      stamina = Stamina(clamp(previous.stamina.value + staminaChange * dt, 0, 100)),
+      stability = Stability(clamp(previous.stability.value + (5 + ratings.physical.balance.value * .14) * dt, 0, 100)),
+      movement = if bracing then MovementMode.Bracing else if sprinting then MovementMode.Sprinting else MovementMode.Normal
     )
+    AthleteMotion.flight(moved, input)
 
   def clamp(value: Double, min: Double, max: Double): Double = math.max(min, math.min(value, max))
 

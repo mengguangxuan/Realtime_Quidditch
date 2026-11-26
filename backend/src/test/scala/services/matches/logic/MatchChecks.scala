@@ -36,6 +36,13 @@ object MatchChecks:
     assert(matchSession.start().isRight)
     assert(matchSession.submit(PlayerId("guest"), Control.Charge) == Left(ActionRejection.PlayerNotInMatch))
     assert(matchSession.switchAthlete(home, AthleteId(2)) == Left(ActionRejection.AthleteNotOnPlayersSide))
+    val catchCommand = ApplyControlMessage(home, Control.Catch(CatchTarget.Quaffle))
+    assert(catchCommand.plan(matchSession).isRight)
+    val missed = matchSession.advance()
+    assert(missed.events.isEmpty)
+    assert(missed.state.athletes(homeAthlete).pose.flatMap(_.ballAction).exists(_.kind == BallAction.Reaching))
+    for _ <- 1 to 4 do matchSession.advance()
+    assert(matchSession.latest.state.athletes(homeAthlete).pose.isEmpty)
 
     def steer(player: PlayerId, athlete: AthleteId, target: Vec3): Unit =
       for _ <- 1 to 150 do
@@ -48,11 +55,14 @@ object MatchChecks:
       assert((matchSession.latest.state.athletes(athlete).flight.position.value - target).length < .4)
 
     steer(home, homeAthlete, Vec3(0, 0, 1.5))
-    val catchCommand = ApplyControlMessage(home, Control.Catch(CatchTarget.Quaffle))
     assert(decode[ApplyControlMessage](catchCommand.asJson.noSpaces) == Right(catchCommand))
     assert(catchCommand.plan(matchSession).isRight)
     val caught = matchSession.advance()
     assert(caught.events.contains(MatchEvent.QuafflePossessionChanged(QuafflePossessionOutcome.Caught(homeAthlete))))
+    val catchingAthlete = caught.state.athletes(homeAthlete)
+    assert(catchingAthlete.pose.flatMap(_.ballAction).exists(_.kind == BallAction.Securing))
+    assert(catchingAthlete.asJson.mapObject(_.remove("pose")).as[AthleteState] ==
+      Right(catchingAthlete.copy(pose = None)))
     assert(decode[TimelineFrame](caught.asJson.noSpaces) == Right(caught))
 
     steer(home, homeAthlete, Vec3(36, 7.1, 10.0))
@@ -60,6 +70,7 @@ object MatchChecks:
     val direction = Direction.from(Vec3(44, 7.1, 10.45) - position).toOption.get
     assert(matchSession.submit(home, Control.Shoot(ShotAim(direction, ShotPower(1), None))).isRight)
     val released = matchSession.advance()
+    assert(released.state.athletes(homeAthlete).pose.flatMap(_.ballAction).exists(_.kind == BallAction.Shooting))
     assert(released.events.exists {
       case MatchEvent.QuafflePossessionChanged(QuafflePossessionOutcome.Released(`homeAthlete`, _)) => true
       case _ => false
@@ -265,6 +276,12 @@ object MatchChecks:
     }
     assert(afterThreeSeconds.flight.position.value.x > 40)
     assert(afterThreeSeconds.flight.position.value.x < Pitch.alpine.halfLength - 5)
+    val high = stationary.copy(flight = stationary.flight.copy(position = Position(Vec3(0, 0, 20))))
+    val diving = (1 to 10).foldLeft(high) { (state, _) =>
+      FlightRules.moveAthlete(rider, state, Some(idle.copy(climb = AxisInput(-1))), carrying = false)
+    }
+    assert(diving.pose.exists(_.diving))
+    assert(!FlightRules.moveAthlete(rider, diving, Some(idle), carrying = false).pose.exists(_.diving))
 
   private def checkControlSwitch(setup: MatchSetup): Unit =
     val human = setup.players.head

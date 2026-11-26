@@ -35,7 +35,29 @@ final case class FlightState(position: Position, velocity: Velocity, facing: Dir
 object FlightState:
   given Codec.AsObject[FlightState] = deriveCodec[FlightState]
 
-final case class AthleteState(flight: FlightState, stamina: Stamina, stability: Stability, movement: MovementMode)
+enum BallAction:
+  case Reaching, Securing, Shooting, Passing
+
+object BallAction:
+  given Codec.AsObject[BallAction] = deriveCodec[BallAction]
+
+final case class TimedBallAction(kind: BallAction, ticksRemaining: Int)
+
+object TimedBallAction:
+  given Codec.AsObject[TimedBallAction] = deriveCodec[TimedBallAction]
+
+final case class AthletePose(diving: Boolean, ballAction: Option[TimedBallAction])
+
+object AthletePose:
+  given Codec.AsObject[AthletePose] = deriveCodec[AthletePose]
+
+final case class AthleteState(
+    flight: FlightState,
+    stamina: Stamina,
+    stability: Stability,
+    movement: MovementMode,
+    pose: Option[AthletePose] = None
+)
 
 object AthleteState:
   given Codec.AsObject[AthleteState] = deriveCodec[AthleteState]

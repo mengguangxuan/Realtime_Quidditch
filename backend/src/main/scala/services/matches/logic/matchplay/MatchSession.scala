@@ -114,7 +114,7 @@ final class MatchSession private (initial: MatchState, shotSeed: Long, recordFra
           inputs = Inputs(shots = inputs.shots)
           saved
         else
-          val saved = append(state, Nil)
+          val saved = append(AthleteMotion.tick(state), Nil)
           restartTicks += 1
           saved
       case MatchPhase.Ready | MatchPhase.Finished(_) => latest

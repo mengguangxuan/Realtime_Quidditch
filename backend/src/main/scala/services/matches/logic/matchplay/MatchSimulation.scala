@@ -49,7 +49,8 @@ private[matches] object MatchSimulation:
         .getOrElse(state.setup.roster.find(_.side == side).get.id)
 
     def place(entry: AthleteState, at: Vec3, facing: Direction): AthleteState =
-      entry.copy(flight = FlightState(Position(at), Velocity(Vec3.zero), facing), movement = MovementMode.Normal)
+      entry.copy(flight = FlightState(Position(at), Velocity(Vec3.zero), facing),
+        movement = MovementMode.Normal, pose = None)
 
     def possession(side: Side, who: AthleteId, athletes: Map[AthleteId, AthleteState]): MatchState =
       state.copy(athletes = athletes, attackClock = Some(rules.attackFor(side)),
@@ -83,9 +84,10 @@ private[matches] object MatchSimulation:
         state.copy(athletes = athletes, controls = controls, attackClock = None,
           phase = MatchPhase.Penalty(MatchBalls(QuaffleState.HeldBy(who), special), side, who, rules.penaltyAimTicks))
 
-  def advancePenalty(state: MatchState, penalty: MatchPhase.Penalty,
+  def advancePenalty(start: MatchState, penalty: MatchPhase.Penalty,
       queued: Vector[(AthleteId, Control)], inputs: Inputs, shotSeed: Long, rules: MatchRules): Step =
     val shooter = penalty.shooter
+    val state = AthleteMotion.tick(start)
 
     def resolve(outcome: MatchRules.PenaltyResult, nextInputs: Inputs): Step =
       val (finished, events) = rules.finishPenalty(state, penalty, outcome)
@@ -112,7 +114,8 @@ private[matches] object MatchSimulation:
             val motion = shoot(state, athlete, shotAim, seedForShot(shotSeed, inputs.shots))
             val released = MatchEvent.QuafflePossessionChanged(QuafflePossessionOutcome.Released(shooter, motion))
             val step = advanceShot(motion, rules.shotFlightTicks - 1, inputs.copy(shots = inputs.shots + 1))
-            step.copy(events = released :: step.events)
+            step.copy(state = AthleteMotion.ballAction(step.state, shooter, BallAction.Shooting),
+              events = released :: step.events)
           case None if penalty.remainingTicks <= 1 => resolve(MatchEvent.PenaltyExpired(shooter), inputs)
           case None =>
             Step(state.copy(phase = penalty.copy(remainingTicks = penalty.remainingTicks - 1)), Nil, inputs)
@@ -127,7 +130,7 @@ private[matches] object MatchSimulation:
       shotSeed: Long,
       rules: MatchRules = MatchRules.standard
   ): Step =
-    var state = start
+    var state = AthleteMotion.tick(start)
     var balls = initialBalls
     val events = List.newBuilder[MatchEvent]
     val step = start.clock.elapsed.value + 1
@@ -161,6 +164,9 @@ private[matches] object MatchSimulation:
             shotUntil = None
             ownBall()
             possession(QuaffleState.HeldBy(id), QuafflePossessionOutcome.Caught(id))
+            state = AthleteMotion.ballAction(state, id, BallAction.Securing)
+          else if balls.quaffle.isInstanceOf[QuaffleState.Free] then
+            state = AthleteMotion.ballAction(state, id, BallAction.Reaching)
         case Control.Shoot(aim) =>
           if balls.quaffle != QuaffleState.HeldBy(id) then reject(ActionRejection.NotBallHolder)
           else if attackClock.exists(_.remainingTicks == 0) then reject(ActionRejection.TemporarilyUnavailable)
@@ -170,6 +176,7 @@ private[matches] object MatchSimulation:
             shotUntil = Some(step + rules.shotFlightTicks - 1)
             thrower = Some(id)
             possession(QuaffleState.Free(motion), QuafflePossessionOutcome.Released(id, motion))
+            state = AthleteMotion.ballAction(state, id, BallAction.Shooting)
         case Control.Pass(receiver) =>
           if balls.quaffle != QuaffleState.HeldBy(id) then reject(ActionRejection.NotBallHolder)
           else if !roster.exists(mate => mate.id == receiver && mate.id != id && mate.side == athlete.side) then
@@ -179,6 +186,7 @@ private[matches] object MatchSimulation:
             passTarget = Some(receiver -> (step + 2 * ticksPerSecond))
             thrower = Some(id)
             possession(QuaffleState.Free(motion), QuafflePossessionOutcome.Released(id, motion))
+            state = AthleteMotion.ballAction(state, id, BallAction.Passing)
             events += MatchEvent.QuafflePassed(id, receiver)
         case Control.SwitchAthlete(_) => ()
         case Control.Charge | Control.Grab =>
