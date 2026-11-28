@@ -311,8 +311,9 @@ func _check_team_play() -> void:
 func _check_seven_aside_controls() -> void:
 	var lineup: Array[String] = game._home_lineup.duplicate()
 	var players: Array = game.current_state["setup"]["players"]
-	if players.filter(func(player: Dictionary) -> bool: return player["kind"] == "Human").size() != 1:
-		_fail("The 7v7 human-vs-CPU match should have exactly one human player")
+	var humans := players.filter(func(player: Dictionary) -> bool: return player["kind"] == "Human")
+	if humans.size() != 1 or humans[0]["side"] != "Home":
+		_fail("The 7v7 match should give one home rider to the human and all others to the AI")
 		return
 	var start := lineup.find(game._selected_id)
 	for index in range(1, lineup.size() + 1):
@@ -327,7 +328,12 @@ func _check_seven_aside_controls() -> void:
 	if game._pass_receiver() != lineup[3]:
 		_fail("The aimed pass did not select the teammate in its direction")
 		return
-	print("Godot ↔ Scala passed: 14 riders, custom formation, control cycling and directional pass selection")
+	game.api.flight({"forward": -1, "strafe": 0, "climb": 0, "sprint": false})
+	if not await _until(func() -> bool: return game._locations[game._selected_id].x < origin.x - 1.0, 2.0):
+		_fail("Flight input did not move the human-controlled rider in 7v7")
+		return
+	game.api.flight({"forward": 0, "strafe": 0, "climb": 0, "sprint": false})
+	print("Godot ↔ Scala passed: 14 riders, one human, custom formation, flying, control cycling and directional pass selection")
 	quit(0)
 
 
