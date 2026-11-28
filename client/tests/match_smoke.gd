@@ -406,7 +406,6 @@ func _check_return_to_lobby() -> bool:
 	var match_id: String = game.current_state["id"]
 	var token: String = game.api.token
 	var watching: bool = game._spectating
-	var selected: String = game._selected_id
 	var escape := InputEventKey.new()
 	escape.physical_keycode = KEY_ESCAPE
 	escape.pressed = true
@@ -418,19 +417,51 @@ func _check_return_to_lobby() -> bool:
 	if lobby.scene_file_path != "res://lobby.tscn" or lobby.token != token:
 		_fail("Escape did not preserve the authenticated lobby session")
 		return false
-	if not await _until(func() -> bool: return lobby._active_match and not lobby._play.disabled, 4.0):
-		_fail("The lobby did not offer to rejoin the running match")
+	if not await _until(func() -> bool: return not lobby._active_match and not lobby._play.disabled, 4.0):
+		_fail("The lobby did not offer to start a new match")
 		return false
+	var request := HTTPRequest.new()
+	request.timeout = 3
+	root.add_child(request)
+	var origin := MatchApi.backend_origin()
+	var headers := PackedStringArray(["Authorization: Bearer " + token, "Content-Type: application/json"])
+	request.request(origin + "/matches/demo", headers)
+	var response: Array = await request.request_completed
+	var final_frame: Variant = JSON.parse_string(response[3].get_string_from_utf8())
+	if response[1] != 200 or not final_frame is Dictionary or final_frame["state"]["id"] != match_id or \
+			not final_frame["state"]["phase"].get("Finished", {}).get("reason", {}).has("EndedByUser"):
+		_fail("The backend did not finish the current match when Escape was pressed")
+		return false
+	var lobby_id: int = lobby.get_instance_id()
 	lobby._start()
+	if not await _until(func() -> bool: return current_scene.get_instance_id() != lobby_id, 4.0):
+		_fail("A new match did not open from the lobby")
+		return false
 	game = current_scene
 	game.read_keyboard = false
-	if not await _until(func() -> bool: return game.current_state.get("id") == match_id and game._spectating == watching, 4.0):
-		_fail("Returning to the arena did not reopen the same match and mode")
+	if not await _until(func() -> bool: return not game.current_state.is_empty(), 4.0):
+		_fail("The new match did not receive a snapshot")
 		return false
-	if not watching and not await _until(func() -> bool: return absf(game._velocities[selected].x) < 0.5, 2.0):
-		_fail("The rider continued flying under the last command after leaving")
+	var score: Dictionary = game.current_state["score"]
+	if game.current_state["id"] == match_id or game._spectating != watching or \
+			not game.current_state["phase"].has("InPlay") or int(score["home"]) != 0 or int(score["away"]) != 0:
+		_fail("A new match did not start with a distinct ID and fresh state")
 		return false
-	print("Verified Escape returns to the authenticated lobby and allows rejoining the same match")
+	request.request(origin + "/matches/demo/end", headers, HTTPClient.METHOD_POST, JSON.stringify({"id": match_id}))
+	response = await request.request_completed
+	if response[1] != 409:
+		_fail("A stale end request could affect the new match")
+		return false
+	request.request(origin + "/matches/history/%s/timeline/%d" % [match_id, int(final_frame["tick"]["value"])], headers)
+	response = await request.request_completed
+	request.queue_free()
+	var archived: Variant = JSON.parse_string(response[3].get_string_from_utf8())
+	if response[1] != 200 or not archived is Dictionary or archived["tick"] != final_frame["tick"] or \
+			archived["state"]["id"] != match_id or archived["state"]["phase"] != final_frame["state"]["phase"] or \
+			archived["state"]["score"] != final_frame["state"]["score"] or archived["events"] != final_frame["events"]:
+		_fail("The old match's final frame was not preserved in history")
+		return false
+	print("Verified Escape ends the match, preserves its final frame and allows a fresh match from the lobby")
 	return true
 
 

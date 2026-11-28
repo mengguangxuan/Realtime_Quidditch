@@ -33,6 +33,17 @@ private[matches] final class MatchRoutes(session: MatchSession, computerOpponent
             case Left(rejection: ActionRejection) => 409 -> rejection.asJson
           }
         }
+      case ("POST", "/matches/demo/end") =>
+        withBody(exchange, 1024) { body =>
+          (username, parse(body).flatMap(_.hcursor.get[MatchId]("id"))) match
+            case (None, _) => IO.pure(401 -> errorJson("authentication_required"))
+            case (_, Left(_)) => IO.pure(400 -> errorJson("Invalid match ID"))
+            case (Some(user), Right(id)) => EndMatchMessage(user, id, session).plan(connection).map {
+              case Right(frame) => 200 -> frame.asJson
+              case Left(reason: String) => 403 -> errorJson(reason)
+              case Left(rejection: ActionRejection) => 409 -> rejection.asJson
+            }
+        }
       case ("POST", "/matches/demo/controls") =>
         withBody(exchange, 8192) { body =>
           val command = for

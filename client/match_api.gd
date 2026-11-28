@@ -70,17 +70,16 @@ func resend_flight() -> void:
 	_last_flight = {}
 
 
-func stop_flight() -> void:
+func end_match(id: String) -> bool:
 	set_process(false)
-	_outgoing.clear()
-	if not _in_play or not _can_send or token.is_empty():
-		return
-	if _send.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
-		await _send.request_completed
-	if _in_play and _can_send and not token.is_empty():
-		var neutral := {"forward": 0, "strafe": 0, "climb": 0, "turn": 0, "sprint": false}
-		if _send_control({"Fly": {"input": neutral}}) == OK:
-			await _send.request_completed
+	_send.cancel_request()
+	if _send.request(base_url + "/end", _auth_headers(),
+			HTTPClient.METHOD_POST, JSON.stringify({"id": id})) == OK:
+		var response: Array = await _send.request_completed
+		if response[0] == HTTPRequest.RESULT_SUCCESS and response[1] == 200:
+			return true
+	set_process(true)
+	return false
 
 
 func control(action: Dictionary) -> void:
@@ -88,8 +87,8 @@ func control(action: Dictionary) -> void:
 		_outgoing.append(action)
 
 
-func _send_control(action: Dictionary) -> Error:
-	return _send.request(
+func _send_control(action: Dictionary) -> void:
+	_send.request(
 		base_url + "/controls", _auth_headers(), HTTPClient.METHOD_POST,
 		JSON.stringify({"player": "home", "control": action})
 	)

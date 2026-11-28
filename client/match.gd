@@ -49,6 +49,7 @@ var _throw_power := 80.0
 var _last_tick := -1
 var _ruling := ""
 var _leaving := false
+var _end_failed := false
 
 
 func _ready() -> void:
@@ -80,13 +81,15 @@ func _return_to_login() -> void:
 
 
 func _return_to_lobby() -> void:
-	if _leaving or api.token.is_empty():
+	var id: String = current_state.get("id", "")
+	if _leaving or api.token.is_empty() or id.is_empty():
 		return
 	_leaving = true
+	_end_failed = false
 	_set_aiming(false)
-	if not _spectating:
-		await api.stop_flight()
-	if api.token.is_empty():
+	if not await api.end_match(id):
+		_leaving = false
+		_end_failed = true
 		return
 	var lobby_scene := load("res://lobby.tscn") as PackedScene
 	var lobby := lobby_scene.instantiate()
@@ -449,7 +452,7 @@ func _apply_frame(frame: Dictionary) -> void:
 		_home_holds_ball = false
 	var lineup: Array = current_state["setup"]["roster"]
 	_home_lineup.clear()
-	_controls.text = "WASD 移动   Z / X 转身   空格 / C 升降   E 接球   F 投球   R 传球   Tab 切换   V 冲撞   Esc 返回大厅" if lineup.size() > 2 else _controls_default
+	_controls.text = "WASD 移动   Z / X 转身   空格 / C 升降   E 接球   F 投球   R 传球   Tab 切换   V 冲撞   Esc 结束比赛" if lineup.size() > 2 else _controls_default
 	for athlete: Dictionary in lineup:
 		var id := str(int(athlete["id"]))
 		var flight: Dictionary = current_state["athletes"][id]["flight"]
@@ -531,7 +534,7 @@ func _update_hud() -> void:
 		var view := "跟球" if _follow_ball else "全场"
 		var other_view := "全场" if _follow_ball else "跟球"
 		var names := "隐藏姓名" if _show_spectator_names else "显示姓名"
-		_spectator_hint.text = "%s视角   ·   Tab 切换%s   ·   滚轮缩放   ·   N %s   ·   Esc 返回大厅" % [view, other_view, names]
+		_spectator_hint.text = "%s视角   ·   Tab 切换%s   ·   滚轮缩放   ·   N %s   ·   Esc 结束比赛" % [view, other_view, names]
 	var home := _club_name("Home") if named_teams else "绿队"
 	var away := _club_name("Away") if named_teams else "蓝队"
 	var home_caption := home + "电脑" if _spectating else (home if named_teams else "你")
@@ -545,6 +548,12 @@ func _update_hud() -> void:
 		_score.text += "  ·  %s进攻 %d 秒" % [team, ceili(attack["remainingTicks"] / 20.0)]
 	if _match_claimed:
 		_status.text = "此场比赛由另一个账号开启"
+		return
+	if _leaving:
+		_status.text = "正在结束比赛…"
+		return
+	if _end_failed:
+		_status.text = "未能结束比赛，按 Esc 重试"
 		return
 	var phase: Dictionary = current_state["phase"]
 	if phase.has("Ready"):
@@ -657,7 +666,7 @@ func _add_lighting() -> void:
 	add_child(environment)
 
 
-const _controls_default := "WASD 移动   Z / X 转身   空格 / C 升降   Shift 冲刺   E 接球   右键瞄准   F 投球   V 冲撞   G 拉拽   B 护球   Esc 返回大厅"
+const _controls_default := "WASD 移动   Z / X 转身   空格 / C 升降   Shift 冲刺   E 接球   右键瞄准   F 投球   V 冲撞   G 拉拽   B 护球   Esc 结束比赛"
 
 
 func _create_hud() -> void:

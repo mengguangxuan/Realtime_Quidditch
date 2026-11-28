@@ -1,5 +1,6 @@
 package services.matches.logic
 
+import java.util.UUID
 import java.util.concurrent.ThreadLocalRandom
 import services.matches.objects.*
 import MatchSimulation.{Inputs, begin, formation, resume, ticksPerSecond}
@@ -15,7 +16,11 @@ private[matches] final class MatchSession private (initial: MatchState, shotSeed
   private var restartTicks = 0
   private var owner = Option.empty[String]
 
-  private[matches] def mayStart(username: String): Boolean = synchronized(owner.forall(_ == username))
+  private[matches] def mayStart(username: String): Boolean = synchronized {
+    latest.state.phase match
+      case MatchPhase.Finished(_) => true
+      case _ => owner.forall(_ == username)
+  }
 
   private[matches] def startFor(username: Option[String], lineup: Option[MatchSetup])
       : Either[String | ActionRejection, TimelineFrame] = synchronized {
@@ -32,6 +37,20 @@ private[matches] final class MatchSession private (initial: MatchState, shotSeed
       else Left("match_unavailable")
     }
 
+  private[matches] def endFor(username: String, id: MatchId): Either[String | ActionRejection, TimelineFrame] =
+    synchronized {
+      val current = latest
+      if current.state.id != id then Left(ActionRejection.TemporarilyUnavailable)
+      else if !owner.contains(username) then Left("match_unavailable")
+      else current.state.phase match
+        case MatchPhase.Ready => Left(ActionRejection.MatchNotInPlay)
+        case MatchPhase.Finished(_) => Right(current)
+        case _ =>
+          val reason = FinishReason.EndedByUser
+          val finished = current.state.copy(phase = MatchPhase.Finished(reason), attackClock = None)
+          Right(append(finished, List(MatchEvent.MatchEnded(reason))))
+    }
+
   def latest: TimelineFrame = synchronized(timeline.frames.last)
 
   def frame(tick: SimulationTick): Option[TimelineFrame] = synchronized {
@@ -45,6 +64,17 @@ private[matches] final class MatchSession private (initial: MatchState, shotSeed
           setup = setup, controls = setup.assignments,
           athletes = formation(setup.roster, setup.startingPositions.getOrElse(Map.empty))))
         Right(append(begin(state), Nil))
+      case MatchPhase.Finished(_) if lineup.nonEmpty =>
+        val next = initial.copy(id = MatchId(UUID.randomUUID().toString))
+        val first = TimelineFrame(SimulationTick(0), next, Nil)
+        recordFrame(first)
+        timeline = MatchTimeline(next.id, Vector(first))
+        owner = None
+        pending = Vector.empty
+        nextControls = None
+        inputs = Inputs()
+        restartTicks = 0
+        start(lineup)
       case _ => Left(ActionRejection.TemporarilyUnavailable)
   }
 

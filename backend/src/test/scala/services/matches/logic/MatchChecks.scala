@@ -27,6 +27,7 @@ object MatchChecks:
       checkSevenAsideSpacing()
       return
     checkBarcelonaRatings()
+    checkManualFinish()
     val matchSession = MatchSession.demo(cards, shotSeed = 42)
     assert(matchSession.latest.state.setup.roster == cards.take(2))
     val roster = MatchSession.demo(cards, teamSize = 2).latest.state.setup.roster
@@ -906,6 +907,24 @@ object MatchChecks:
     val pressure = after(TeamTactics.default, away, Vec3(-20, 0, 10), 12)
     val cover = after(TeamTactics.default.copy(defense = DefensiveApproach.Cover), away, Vec3(-20, 0, 10), 12)
     assert(pressure.x > -25 && cover.x < -25)
+
+  private def checkManualFinish(): Unit =
+    val session = MatchSession.demo(cards, shotSeed = 42)
+    val initial = session.latest.state
+    assert(session.startFor(Some("host"), None).isRight)
+    assert(session.endFor("guest", initial.id) == Left("match_unavailable"))
+    assert(session.advance().state.phase.isInstanceOf[MatchPhase.InPlay])
+    val finished = session.endFor("host", initial.id).toOption.get
+    assert(finished.state.phase == MatchPhase.Finished(FinishReason.EndedByUser))
+    assert(finished.events == List(MatchEvent.MatchEnded(FinishReason.EndedByUser)))
+    assert(session.advance() == finished)
+    assert(session.endFor("host", initial.id) == Right(finished))
+    assert(session.startFor(Some("host"), None) == Left(ActionRejection.TemporarilyUnavailable))
+    val next = session.startFor(Some("guest"), Some(initial.setup)).toOption.get
+    assert(next.state.id != initial.id && next.tick == SimulationTick(1))
+    assert(session.endFor("host", initial.id) == Left(ActionRejection.TemporarilyUnavailable))
+    assert(session.endFor("host", next.state.id) == Left("match_unavailable"))
+    assert(session.endFor("guest", next.state.id).isRight)
 
   private def checkHistory(): Unit =
     val directory = Files.createTempDirectory("quidditch-history-")

@@ -49,6 +49,7 @@ object MatchSetup:
 enum FinishReason:
   case TimeExpired
   case SnitchCaught(by: AthleteId)
+  case EndedByUser
 
 object FinishReason:
   given Codec.AsObject[FinishReason] = deriveCodec[FinishReason]

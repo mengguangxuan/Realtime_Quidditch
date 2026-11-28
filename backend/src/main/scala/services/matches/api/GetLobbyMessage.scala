@@ -27,5 +27,8 @@ final case class GetLobbyMessage(private val session: MatchSession) extends NoRe
         MatchSimulation.startingSlot(Side.Home, index))
       val positioning = LobbyPositioning(smallSlots, pitch.halfLength, pitch.halfWidth, pitch.goalPlaneX,
         MatchSimulation.startingClearance, MatchSimulation.startingSpacing)
+      val active = state.phase match
+        case MatchPhase.Ready | MatchPhase.Finished(_) => false
+        case _ => true
       MatchLobby(smallRoster, lineups, setup.roster.size / 2, setup.players.forall(_.kind == PlayerKind.Computer),
-        state.phase != MatchPhase.Ready, setup.tacticsFor(Side.Home), positioning, setup.swapTeams.contains(true))
+        active, setup.tacticsFor(Side.Home), positioning, setup.swapTeams.contains(true))
