@@ -81,7 +81,10 @@ WHERE athlete_id = 1;
 
 电脑持球时按现有物理预测射门和传球路线。球环前有空间时可飞行中出手。射门路线被挡时，优先寻找能接稳球、推进或避开压迫的队友，否则带球换路线。复查时可对照传球事件、接球事件、出手速度和计分。
 
+七人制进攻由球队统一分配短接应、远侧拉边、前插和后方接应的位置。自由球阶段每队有一名主要争球人，其他外场电脑球员分散接应。传球已有目标时，由该队的预定接球人优先追球。分配时考虑球员当前的飞行方向和上一帧的站位分工，使接近的选择更稳定。 [Open Soccer 进攻分工](https://github.com/modelence/open-soccer/blob/main/src/client/game/engine.ts#L1892-L1934) · [Google Research Football 的上一目标权重](https://github.com/google-research/football/blob/master/third_party/gfootball_engine/src/onthepitch/AIsupport/AIfunctions.cpp#L635-L645)
+
 运行 `sbt "Test / runMain services.matches.logic.MatchChecks"` 验证接球、射门、计分和时间轴。
+运行 `sbt "Test / runMain services.matches.logic.MatchChecks 7v7-spacing"` 复现种子 42 的前 900 个模拟帧，分别统计进攻和自由球阶段同队外场球员间距小于 5 米的球员对帧数。
 
 ## 观战发现（待处理）
 

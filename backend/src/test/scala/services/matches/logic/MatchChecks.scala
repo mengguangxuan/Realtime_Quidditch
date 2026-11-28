@@ -23,6 +23,9 @@ object MatchChecks:
   }
 
   def main(args: Array[String]): Unit =
+    if args.contains("7v7-spacing") then
+      checkSevenAsideSpacing()
+      return
     val matchSession = MatchSession.demo(cards, shotSeed = 42)
     assert(matchSession.latest.state.setup.roster == cards.take(2))
     val roster = MatchSession.demo(cards, teamSize = 2).latest.state.setup.roster
@@ -155,6 +158,7 @@ object MatchChecks:
     checkDefensePlanning(demo)
     checkCoordinatedDefense()
     checkTeamPressureAssignments()
+    checkSevenAsideSupport()
     checkTeamTactics()
     val solo = MatchSession.demo(cards, computerOpponent = true, shotSeed = 42)
     assert(solo.start().isRight)
@@ -621,6 +625,59 @@ object MatchChecks:
     assert(completedPasses > 0 && movingShots > 0 && score.home + score.away > 0)
     println(s"CPU vs CPU 2v2 (seed 42): $score, $completedPasses/$passes completed passes, $movingShots moving shots, " +
       s"longest defended overlap under 2 m was $longest ticks")
+
+  private def checkSevenAsideSpacing(): Unit =
+    val watch = MatchSession.demo(cards, teamSize = 7, computerHome = true, computerOpponent = true, shotSeed = 42)
+    assert(watch.start().isRight)
+    val setup = watch.latest.state.setup
+    val bySide = setup.roster.filter(athlete => setup.roles(athlete.id) != AthleteRole.Keeper).groupBy(_.side)
+    val sides = setup.roster.map(athlete => athlete.id -> athlete.side).toMap
+    var attackingPairs, loosePairs, heldFrames, looseFrames, passes, catches = 0
+    for _ <- 1 to 900 do
+      val frame = watch.advance()
+      def closePairs(side: Side, holder: Option[AthleteId]): Int =
+        val positions = bySide(side).filterNot(athlete => holder.contains(athlete.id))
+          .map(athlete => frame.state.athletes(athlete.id).flight.position.value)
+        positions.combinations(2).count(pair => (pair.head - pair.last).length < 5)
+      frame.state.phase match
+        case MatchPhase.InPlay(MatchBalls(QuaffleState.HeldBy(holder), _)) =>
+          heldFrames += 1
+          attackingPairs += closePairs(sides(holder), Some(holder))
+        case MatchPhase.InPlay(MatchBalls(QuaffleState.Free(_), _)) =>
+          looseFrames += 1
+          loosePairs += Side.values.map(side => closePairs(side, None)).sum
+        case _ => ()
+      passes += frame.events.count(_.isInstanceOf[MatchEvent.QuafflePassed])
+      catches += frame.events.count {
+        case MatchEvent.QuafflePossessionChanged(QuafflePossessionOutcome.Caught(_)) => true
+        case _ => false
+      }
+    println(s"7v7 seed 42: attack $attackingPairs/$heldFrames, loose $loosePairs/$looseFrames pair-frames under 5 m, " +
+      s"$passes passes, $catches catches, ${watch.latest.state.score}")
+
+  private def checkSevenAsideSupport(): Unit =
+    val state = MatchSession.demo(cards, teamSize = 7, computerHome = true, computerOpponent = true).latest.state
+    val roster = state.setup.roster
+    val computers = roster.map(_.id).toSet
+    for side <- Side.values; style <- AttackSupport.values do
+      val sign = if side == Side.Home then 1 else -1
+      val outfield = roster.filter(athlete => athlete.side == side && state.setup.roles(athlete.id) != AthleteRole.Keeper)
+      val holder = outfield.head.id
+      val tactics = TeamTactics.default.copy(attackSupport = style)
+      val setup = state.setup.copy(tactics = Some(MatchTactics(tactics, tactics)))
+      val point = Vec3(44 * sign, 12, 24)
+      val lead = state.athletes(holder)
+      val ready = state.copy(setup = setup, athletes = state.athletes.updated(holder,
+        lead.copy(flight = lead.flight.copy(position = Position(point)))))
+      val held = QuaffleState.HeldBy(holder)
+      val (support, slots) = teamSupport(ready, held, None, computers, Map.empty)
+      assert(support.keySet == outfield.tail.map(_.id).toSet)
+      assert(support.values.toList.combinations(2).forall(pair => (pair.head.value - pair.last.value).length >= 5))
+      assert(teamSupport(ready, held, None, computers, slots) == (support, slots))
+      val receiver = outfield.last.id
+      val (loose, _) = teamSupport(ready, QuaffleRules.free(point), Some(receiver), computers, slots)
+      assert(loose.size == 10 && !loose.contains(receiver))
+      assert(loose.keySet.forall(id => ready.setup.roles(id) != AthleteRole.Keeper))
 
   private def checkTeamPressureAssignments(): Unit =
     val initial = MatchSession.demo(cards, teamSize = 2).latest.state

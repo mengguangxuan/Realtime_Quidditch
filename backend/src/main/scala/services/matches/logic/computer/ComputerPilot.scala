@@ -10,7 +10,8 @@ private[matches] object ComputerPilot:
       .map(direction => Control.Shoot(ShotAim(direction, ShotPower(1), None)))
 
   def controls(state: MatchState, balls: MatchBalls, assignment: ControlAssignment,
-      passTarget: Option[AthleteId] = None, defensiveTask: Option[TeamDefense.Task] = None): List[Control] =
+      passTarget: Option[AthleteId] = None, defensiveTask: Option[TeamDefense.Task] = None,
+      supportTarget: Option[Position] = None): List[Control] =
     val athlete = state.setup.roster.find(_.id == assignment.athlete).get
     val flight = state.athletes(athlete.id).flight
     val sign = if athlete.side == Side.Home then 1 else -1
@@ -24,10 +25,6 @@ private[matches] object ComputerPilot:
     def move(target: Vec3, sprint: Boolean = false): Control =
       val input = DefensePlanner.flightTo(flight, target, sprint)
       Control.Fly(TeamSpacing.steer(athlete.id, flight, teammates, input))
-
-    def nearest(point: Vec3): AthleteId =
-      val candidates = if fieldPlayers.nonEmpty then fieldPlayers else team
-      candidates.minBy(mate => (state.athletes(mate.id).flight.position.value - point).length).id
 
     def support(point: Vec3): List[Control] =
       val inward = if point.y > 0 then -1 else 1
@@ -53,14 +50,15 @@ private[matches] object ComputerPilot:
         defend(DefensePlanner.keeperAgainstFreeBall(state, athlete, motion, canCatch))
       case QuaffleState.Free(motion) =>
         val point = motion.position.value
-        val pursuer = passTarget.filter(id => team.exists(_.id == id)).getOrElse(nearest(point))
+        val pursuer = looseBallPursuer(state, team, point, passTarget)
         if pursuer == athlete.id then
           defend(DefensePlanner.againstFreeBall(state, athlete, motion,
             canCatch))
-        else
+        else List(move(supportTarget.fold {
           val lead = state.athletes(pursuer).flight.position.value
           val lane = if point.y > 0 then -9 else 9
-          List(move(FlightRules.contain(Vec3(lead.x - sign * 5, lane, math.max(4, lead.z)), 1.5)))
+          FlightRules.contain(Vec3(lead.x - sign * 5, lane, math.max(4, lead.z)), 1.5)
+        }(_.value)))
       case QuaffleState.HeldBy(id) if id == athlete.id =>
         AttackPlanner.withQuaffle(state, athlete, assignment.allowedControls) match
           case AttackPlanner.Decision.Shoot(aim) => List(Control.Shoot(aim))
@@ -75,7 +73,7 @@ private[matches] object ComputerPilot:
       case QuaffleState.HeldBy(id) =>
         val carrier = state.athletes(id).flight.position.value
         if keeper then defend(DefensePlanner.guardGoal(athlete, carrier))
-        else if team.exists(_.id == id) then support(carrier)
+        else if team.exists(_.id == id) then supportTarget.fold(support(carrier))(target => List(move(target.value)))
         else defensiveTask.toList.flatMap {
           case TeamDefense.Task.MarkCarrier => defend(DefensePlanner.againstCarrier(state, athlete, id))
           case TeamDefense.Task.ClosePassingLane(_, target) => List(move(target.value))
