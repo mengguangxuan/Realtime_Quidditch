@@ -36,7 +36,7 @@
 
 ## 原型球员
 
-球员卡存放在 SQLite 的 `athlete_cards` 表中，每个球员 ID 对应一条 `Athlete` 记录。选卡页读取库内评分，提交开赛时后端重新读取球员卡，按首发 ID 和每队人数生成阵容。初始化使用 `src/main/resources/matches/athlete-cards.json` 补齐缺失的默认卡，已存在的卡保留库内值。开赛帧和后续时间轴保留该场使用的属性。
+球员卡存放在 SQLite 的 `athlete_cards` 表中，每个球员 ID 对应一条 `Athlete` 记录。选卡页读取库内评分，提交开赛时后端重新读取球员卡，按首发 ID 和每队人数生成阵容。初始化使用 `src/main/resources/matches/athlete-cards.json` 补齐缺失的默认卡。巴塞罗那原有的全 75 占位评分在启动时自动更新，手动修改过的球员卡保留库内评分。开赛帧和后续时间轴保留该场使用的属性。
 
 例如，在 SQLite 中把哈利的速度调整为 92。下一场比赛会读到新值。
 
@@ -53,7 +53,13 @@ WHERE athlete_id = 1;
 | 3 | Ron Weasley | 格兰芬多 | 接球、短传、守门 | `Ron_Weasley_Gryffindor_1516467167167545344.glb` |
 | 4 | Vincent Crabbe | 斯莱特林 | 身体对抗、平衡、护球 | `Vincent_Crabbe_Slytherin_1516467169587666944.glb` |
 
-七人制格兰芬多使用哈利、罗恩和 ID 5 至 9 的球员，巴塞罗那使用 ID 12 至 18 的球员。哈利和罗恩共享小场模式使用的球员卡，其余首发球员初始评分为 75。Godot 在 `client/assets/riders` 中按球员 ID 加载骑乘姿势和共用扫帚。
+七人制格兰芬多默认使用哈利、罗恩和 ID 5 至 9 的球员，巴塞罗那使用 ID 12 至 18 的球员。哈利和罗恩共享小场模式使用的球员卡。Godot 在 `client/assets/riders` 中按球员 ID 加载骑乘姿势和共用扫帚。
+
+巴塞罗那球员的数值是根据现实比赛风格设定的魁地奇游戏评分。热苏斯侧重前场跑动、护球和短传配合，阿德耶米侧重直线速度和加速度。 [热苏斯技术特点](https://www.arsenal.com/news/arteta-on-the-win-jesus-odegaard-and-transfers-aRutO7M49UHg) · [阿德耶米比赛报告](https://www.bundesliga.com/en/bundesliga/news/bayer-leverkusen-borussia-dortmund-match-report-highlights-matchday-12-34976/)
+
+加西亚侧重扑救反应和接球，孔德侧重回追和拦截，库巴西侧重站位和由后场出球。 [加西亚](https://www.fcbarcelona.com/en/football/first-team/players//110491/-------------------joan---------------garcia) · [孔德](https://www.fcbarcelona.com/en/football/first-team/jugadores/15552/jules-kounde) · [库巴西](https://www.fcbarcelona.com/en/football/first-team/joueurs/129400/pau-cubarsi)
+
+亚马尔侧重带球转向和创造机会，拉菲尼亚侧重终结、传球和持续施压。 [亚马尔](https://www.fcbarcelona.com/en/football/first-team/players//129404/lamine-yamal) · [拉菲尼亚](https://www.fcbarcelona.com/en/football/first-team/players/24156/raphael-dias-belloli) · [弗里克谈逼抢](https://penyes.fcbarcelona.com/en/news/4578296/hansi-flick-were-focused-on-our-own-job/amp)
 
 七人制由罗恩和若昂·加西亚分任守门员。电脑守门员在己方球环前站位，处理进入守备区的鬼飞球。格兰芬多穿深红肩背，巴塞罗那穿亮蓝肩背，守门员带白色肩块。
 

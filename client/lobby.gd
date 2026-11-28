@@ -455,6 +455,12 @@ func _show_card(card: Dictionary) -> void:
 		ratings["physical"]["strength"], ratings["ballControl"]["catching"],
 		ratings["throwing"]["finishing"], ratings["awareness"]["creativity"]
 	]
+	if _keepers.has(card["id"]):
+		_detail.text = "%s · 守门员\n飞行速度  %d     转向  %d\n门将反应  %d     扑救范围  %d\n站位  %d     控球  %d" % [
+			card["name"], ratings["flight"]["speed"], ratings["flight"]["turning"],
+			ratings["goalkeeping"]["reflexes"], ratings["goalkeeping"]["reach"],
+			ratings["goalkeeping"]["positioning"], ratings["goalkeeping"]["handling"]
+		]
 	for child in _preview.get_children():
 		child.queue_free()
 	var kit := Color.TRANSPARENT

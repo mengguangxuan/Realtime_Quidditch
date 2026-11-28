@@ -26,6 +26,7 @@ object MatchChecks:
     if args.contains("7v7-spacing") then
       checkSevenAsideSpacing()
       return
+    checkBarcelonaRatings()
     val matchSession = MatchSession.demo(cards, shotSeed = 42)
     assert(matchSession.latest.state.setup.roster == cards.take(2))
     val roster = MatchSession.demo(cards, teamSize = 2).latest.state.setup.roster
@@ -465,6 +466,35 @@ object MatchChecks:
     assert(!tooSoon.events.contains(caught) && !tooSoon.events.contains(disrupted))
     val ready = unopposed.copy(clock = unopposed.clock.copy(elapsed = PlayTick(nextTick + rules.catchRetryTicks - 1)))
     assert(MatchSimulation.advance(ready, balls, Vector(attempt), miss.inputs, missSeed).events.contains(caught))
+
+  private def checkBarcelonaRatings(): Unit =
+    Using.resource(DriverManager.getConnection("jdbc:sqlite::memory:")) { connection =>
+      AthleteCardTableInitializer.initialize(connection).unsafeRunSync()
+      val defaults = AthleteCardTable.list(connection).unsafeRunSync()
+      val team = defaults.filter(athlete => athlete.id.value >= 12 && athlete.id.value <= 18)
+      assert(team.size == 7 && team.map(_.ratings).distinct.size == 7)
+      assert(team.maxBy(_.ratings.flight.speed.value).id == AthleteId(15))
+      assert(team.maxBy(_.ratings.goalkeeping.reflexes.value).id == AthleteId(13))
+      val neutral = team.take(2).map { athlete =>
+        val groups = athlete.ratings.asJson.mapObject(_.mapValues(_.mapObject(_.mapValues(_ => 75.asJson))))
+        athlete.asJson.mapObject(_.add("ratings", groups))
+      }
+      Using.resource(connection.prepareStatement("UPDATE athlete_cards SET card = ? WHERE athlete_id = ?")) {
+        statement =>
+          for (card, index) <- neutral.zipWithIndex do
+            val id = 12 + index
+            val stored = if id == 13 then card.noSpaces.replace("\"speed\":75", "\"speed\":79") else card.noSpaces
+            statement.setString(1, stored)
+            statement.setInt(2, id)
+            assert(statement.executeUpdate() == 1)
+      }
+      AthleteCardTableInitializer.initialize(connection).unsafeRunSync()
+      val migrated = AthleteCardTable.list(connection).unsafeRunSync()
+      assert(migrated.find(_.id == AthleteId(12)) == defaults.find(_.id == AthleteId(12)))
+      assert(migrated.find(_.id == AthleteId(13)).exists(_.ratings.flight.speed == Rating(79)))
+      AthleteCardTableInitializer.initialize(connection).unsafeRunSync()
+      assert(AthleteCardTable.list(connection).unsafeRunSync() == migrated)
+    }
 
   private def checkAttackPlanning(): Unit =
     val state = MatchSession.demo(cards, teamSize = 2).latest.state

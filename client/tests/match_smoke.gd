@@ -83,6 +83,9 @@ func _run() -> void:
 	if (watch or team_size == 7) and lobby._home_cards.item_count > 1:
 		lobby._home_cards.select(1)
 		lobby._home_cards.item_selected.emit(1)
+		if team_size == 7 and not watch and not lobby._detail.text.contains("门将反应  94"):
+			_fail("The Barcelona keeper card did not show his new reactions rating")
+			return
 	var selected := int(lobby._chosen["id"])
 	var team_play := team_size > 1
 	var positioned := 0

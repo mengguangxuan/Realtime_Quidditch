@@ -147,12 +147,12 @@
     "name": "Gabriel Jesus",
     "side": "Away",
     "ratings": {
-      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
-      "physical": {"strength": 75, "balance": 75, "endurance": 75},
-      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
-      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
-      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
-      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+      "flight": {"speed": 82, "acceleration": 85, "turning": 86, "climb": 75},
+      "physical": {"strength": 77, "balance": 87, "endurance": 86},
+      "ballControl": {"catching": 82, "carryFlight": 87, "shielding": 86},
+      "throwing": {"shortPass": 85, "longPass": 77, "finishing": 82, "power": 80, "curve": 80},
+      "awareness": {"offense": 89, "defense": 81, "creativity": 84, "interception": 79},
+      "goalkeeping": {"positioning": 64, "reflexes": 68, "reach": 67, "handling": 62}
     }
   },
   {
@@ -160,12 +160,12 @@
     "name": "Joan Garcia",
     "side": "Away",
     "ratings": {
-      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
-      "physical": {"strength": 75, "balance": 75, "endurance": 75},
-      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
-      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
-      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
-      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+      "flight": {"speed": 72, "acceleration": 73, "turning": 75, "climb": 84},
+      "physical": {"strength": 83, "balance": 84, "endurance": 81},
+      "ballControl": {"catching": 92, "carryFlight": 73, "shielding": 83},
+      "throwing": {"shortPass": 78, "longPass": 82, "finishing": 55, "power": 77, "curve": 60},
+      "awareness": {"offense": 66, "defense": 89, "creativity": 72, "interception": 86},
+      "goalkeeping": {"positioning": 89, "reflexes": 94, "reach": 91, "handling": 89}
     }
   },
   {
@@ -173,12 +173,12 @@
     "name": "Jules Kounde",
     "side": "Away",
     "ratings": {
-      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
-      "physical": {"strength": 75, "balance": 75, "endurance": 75},
-      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
-      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
-      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
-      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+      "flight": {"speed": 88, "acceleration": 86, "turning": 84, "climb": 83},
+      "physical": {"strength": 89, "balance": 86, "endurance": 89},
+      "ballControl": {"catching": 84, "carryFlight": 78, "shielding": 85},
+      "throwing": {"shortPass": 83, "longPass": 81, "finishing": 66, "power": 77, "curve": 73},
+      "awareness": {"offense": 72, "defense": 91, "creativity": 74, "interception": 90},
+      "goalkeeping": {"positioning": 68, "reflexes": 72, "reach": 74, "handling": 67}
     }
   },
   {
@@ -186,12 +186,12 @@
     "name": "Karim Adeyemi",
     "side": "Away",
     "ratings": {
-      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
-      "physical": {"strength": 75, "balance": 75, "endurance": 75},
-      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
-      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
-      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
-      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+      "flight": {"speed": 96, "acceleration": 95, "turning": 85, "climb": 80},
+      "physical": {"strength": 72, "balance": 83, "endurance": 83},
+      "ballControl": {"catching": 76, "carryFlight": 89, "shielding": 77},
+      "throwing": {"shortPass": 77, "longPass": 73, "finishing": 80, "power": 81, "curve": 75},
+      "awareness": {"offense": 86, "defense": 72, "creativity": 79, "interception": 72},
+      "goalkeeping": {"positioning": 62, "reflexes": 69, "reach": 67, "handling": 62}
     }
   },
   {
@@ -199,12 +199,12 @@
     "name": "Lamine Yamal",
     "side": "Away",
     "ratings": {
-      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
-      "physical": {"strength": 75, "balance": 75, "endurance": 75},
-      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
-      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
-      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
-      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+      "flight": {"speed": 86, "acceleration": 90, "turning": 95, "climb": 77},
+      "physical": {"strength": 70, "balance": 93, "endurance": 82},
+      "ballControl": {"catching": 86, "carryFlight": 95, "shielding": 88},
+      "throwing": {"shortPass": 93, "longPass": 89, "finishing": 87, "power": 83, "curve": 94},
+      "awareness": {"offense": 92, "defense": 73, "creativity": 96, "interception": 73},
+      "goalkeeping": {"positioning": 62, "reflexes": 68, "reach": 66, "handling": 62}
     }
   },
   {
@@ -212,12 +212,12 @@
     "name": "Pau Cubarsi",
     "side": "Away",
     "ratings": {
-      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
-      "physical": {"strength": 75, "balance": 75, "endurance": 75},
-      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
-      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
-      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
-      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+      "flight": {"speed": 74, "acceleration": 77, "turning": 81, "climb": 79},
+      "physical": {"strength": 83, "balance": 84, "endurance": 83},
+      "ballControl": {"catching": 88, "carryFlight": 79, "shielding": 84},
+      "throwing": {"shortPass": 89, "longPass": 94, "finishing": 65, "power": 77, "curve": 78},
+      "awareness": {"offense": 75, "defense": 94, "creativity": 85, "interception": 93},
+      "goalkeeping": {"positioning": 68, "reflexes": 72, "reach": 76, "handling": 67}
     }
   },
   {
@@ -225,12 +225,12 @@
     "name": "Raphinha",
     "side": "Away",
     "ratings": {
-      "flight": {"speed": 75, "acceleration": 75, "turning": 75, "climb": 75},
-      "physical": {"strength": 75, "balance": 75, "endurance": 75},
-      "ballControl": {"catching": 75, "carryFlight": 75, "shielding": 75},
-      "throwing": {"shortPass": 75, "longPass": 75, "finishing": 75, "power": 75, "curve": 75},
-      "awareness": {"offense": 75, "defense": 75, "creativity": 75, "interception": 75},
-      "goalkeeping": {"positioning": 75, "reflexes": 75, "reach": 75, "handling": 75}
+      "flight": {"speed": 87, "acceleration": 88, "turning": 87, "climb": 80},
+      "physical": {"strength": 76, "balance": 86, "endurance": 94},
+      "ballControl": {"catching": 84, "carryFlight": 87, "shielding": 81},
+      "throwing": {"shortPass": 88, "longPass": 90, "finishing": 90, "power": 89, "curve": 93},
+      "awareness": {"offense": 93, "defense": 82, "creativity": 90, "interception": 81},
+      "goalkeeping": {"positioning": 62, "reflexes": 68, "reach": 68, "handling": 63}
     }
   }
 ]
