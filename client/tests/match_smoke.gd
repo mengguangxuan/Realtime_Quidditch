@@ -375,7 +375,8 @@ func _check_seven_aside_controls() -> void:
 	if not await _until(func() -> bool: return game._locations[game._selected_id].x < origin.x - 1.0, 2.0):
 		_fail("Flight input did not move the human-controlled rider in 7v7")
 		return
-	game.api.flight({"forward": 0, "strafe": 0, "climb": 0, "sprint": false})
+	if not await _check_return_to_lobby():
+		return
 	print("Godot ↔ Scala passed: 14 riders, one human, custom formation, flying, control cycling and directional pass selection")
 	quit(0)
 
@@ -394,8 +395,43 @@ func _check_spectator() -> void:
 		return
 	if game._home_lineup.size() == 7 and not await _check_seven_aside_spectator(camera):
 		return
+	if not await _check_return_to_lobby():
+		return
 	print("Godot ↔ Scala passed: CPU vs CPU, autonomous catch, spectator camera and HUD")
 	quit(0)
+
+
+func _check_return_to_lobby() -> bool:
+	var match_scene_id: int = game.get_instance_id()
+	var match_id: String = game.current_state["id"]
+	var token: String = game.api.token
+	var watching: bool = game._spectating
+	var selected: String = game._selected_id
+	var escape := InputEventKey.new()
+	escape.physical_keycode = KEY_ESCAPE
+	escape.pressed = true
+	Input.parse_input_event(escape)
+	if not await _until(func() -> bool: return current_scene.get_instance_id() != match_scene_id, 4.0):
+		_fail("Escape did not return to the lobby")
+		return false
+	var lobby = current_scene
+	if lobby.scene_file_path != "res://lobby.tscn" or lobby.token != token:
+		_fail("Escape did not preserve the authenticated lobby session")
+		return false
+	if not await _until(func() -> bool: return lobby._active_match and not lobby._play.disabled, 4.0):
+		_fail("The lobby did not offer to rejoin the running match")
+		return false
+	lobby._start()
+	game = current_scene
+	game.read_keyboard = false
+	if not await _until(func() -> bool: return game.current_state.get("id") == match_id and game._spectating == watching, 4.0):
+		_fail("Returning to the arena did not reopen the same match and mode")
+		return false
+	if not watching and not await _until(func() -> bool: return absf(game._velocities[selected].x) < 0.5, 2.0):
+		_fail("The rider continued flying under the last command after leaving")
+		return false
+	print("Verified Escape returns to the authenticated lobby and allows rejoining the same match")
+	return true
 
 
 func _check_seven_aside_spectator(camera: Camera3D) -> bool:

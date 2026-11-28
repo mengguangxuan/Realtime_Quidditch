@@ -48,6 +48,7 @@ var _match_claimed := false
 var _throw_power := 80.0
 var _last_tick := -1
 var _ruling := ""
+var _leaving := false
 
 
 func _ready() -> void:
@@ -78,8 +79,26 @@ func _return_to_login() -> void:
 	get_tree().change_scene_to_file.call_deferred("res://login.tscn")
 
 
+func _return_to_lobby() -> void:
+	if _leaving or api.token.is_empty():
+		return
+	_leaving = true
+	_set_aiming(false)
+	if not _spectating:
+		await api.stop_flight()
+	if api.token.is_empty():
+		return
+	var lobby_scene := load("res://lobby.tscn") as PackedScene
+	var lobby := lobby_scene.instantiate()
+	lobby.token = api.token
+	var tree := get_tree()
+	tree.root.add_child(lobby)
+	tree.current_scene = lobby
+	queue_free()
+
+
 func _process(delta: float) -> void:
-	if read_keyboard and not _spectating and not _match_claimed:
+	if read_keyboard and not _leaving and not _spectating and not _match_claimed:
 		if _home_holds_ball:
 			shot_guide.rotate_aim(_axis(KEY_RIGHT, KEY_LEFT), _axis(KEY_UP, KEY_DOWN), delta)
 		if current_state.get("phase", {}).has("InPlay"):
@@ -287,7 +306,7 @@ func _update_rider_visual(visual: Node3D, heading: float, velocity: Vector3, del
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not read_keyboard or _match_claimed:
+	if not read_keyboard or _match_claimed or _leaving:
 		return
 	if _spectating:
 		if event is InputEventMouseButton and event.pressed:
@@ -319,7 +338,13 @@ func _notification(what: int) -> void:
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
-	if not read_keyboard or _match_claimed or not event is InputEventKey or not event.pressed or event.echo:
+	if not event is InputEventKey or not event.pressed or event.echo or _leaving:
+		return
+	if event.keycode == KEY_ESCAPE or event.physical_keycode == KEY_ESCAPE:
+		_return_to_lobby.call_deferred()
+		get_viewport().set_input_as_handled()
+		return
+	if not read_keyboard or _match_claimed:
 		return
 	if event.physical_keycode == KEY_ENTER and current_state.get("phase", {}).has("Ready"):
 		api.start_match()
@@ -424,7 +449,7 @@ func _apply_frame(frame: Dictionary) -> void:
 		_home_holds_ball = false
 	var lineup: Array = current_state["setup"]["roster"]
 	_home_lineup.clear()
-	_controls.text = "WASD 移动   Z / X 转身   空格 / C 升降   E 接球   F 投球   R 传球   Tab 切换   V 冲撞" if lineup.size() > 2 else _controls_default
+	_controls.text = "WASD 移动   Z / X 转身   空格 / C 升降   E 接球   F 投球   R 传球   Tab 切换   V 冲撞   Esc 返回大厅" if lineup.size() > 2 else _controls_default
 	for athlete: Dictionary in lineup:
 		var id := str(int(athlete["id"]))
 		var flight: Dictionary = current_state["athletes"][id]["flight"]
@@ -506,7 +531,7 @@ func _update_hud() -> void:
 		var view := "跟球" if _follow_ball else "全场"
 		var other_view := "全场" if _follow_ball else "跟球"
 		var names := "隐藏姓名" if _show_spectator_names else "显示姓名"
-		_spectator_hint.text = "%s视角   ·   Tab 切换%s   ·   滚轮缩放   ·   N %s" % [view, other_view, names]
+		_spectator_hint.text = "%s视角   ·   Tab 切换%s   ·   滚轮缩放   ·   N %s   ·   Esc 返回大厅" % [view, other_view, names]
 	var home := _club_name("Home") if named_teams else "绿队"
 	var away := _club_name("Away") if named_teams else "蓝队"
 	var home_caption := home + "电脑" if _spectating else (home if named_teams else "你")
@@ -632,7 +657,7 @@ func _add_lighting() -> void:
 	add_child(environment)
 
 
-const _controls_default := "WASD 移动   Z / X 转身   空格 / C 升降   Shift 冲刺   E 接球   右键瞄准   F 投球   V 冲撞   G 拉拽   B 护球"
+const _controls_default := "WASD 移动   Z / X 转身   空格 / C 升降   Shift 冲刺   E 接球   右键瞄准   F 投球   V 冲撞   G 拉拽   B 护球   Esc 返回大厅"
 
 
 func _create_hud() -> void:
