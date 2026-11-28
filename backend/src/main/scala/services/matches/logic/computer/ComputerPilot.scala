@@ -18,7 +18,6 @@ private[matches] object ComputerPilot:
     val tactics = state.setup.tacticsFor(athlete.side)
 
     val team = state.setup.roster.filter(_.side == athlete.side)
-    val fieldPlayers = team.filter(mate => state.setup.roles(mate.id) != AthleteRole.Keeper)
     val keeper = state.setup.roles(athlete.id) == AthleteRole.Keeper
     val canCatch = assignment.allowedControls.contains(ControlKind.Catch)
     val teammates = team.filterNot(_.id == athlete.id).map(mate => mate.id -> state.athletes(mate.id).flight)
@@ -63,12 +62,6 @@ private[matches] object ComputerPilot:
         AttackPlanner.withQuaffle(state, athlete, assignment.allowedControls) match
           case AttackPlanner.Decision.Shoot(aim) => List(Control.Shoot(aim))
           case AttackPlanner.Decision.Pass(receiver) => List(Control.Pass(receiver))
-          case AttackPlanner.Decision.Carry(_) if keeper =>
-            val nearby = fieldPlayers.filter { mate =>
-              val distance = (state.athletes(mate.id).flight.position.value - flight.position.value).length
-              distance >= 2 && distance <= 25
-            }.minByOption(mate => (state.athletes(mate.id).flight.position.value - flight.position.value).length)
-            nearby.fold(defend(DefensePlanner.guardGoal(athlete, flight.position.value)))(mate => List(Control.Pass(mate.id)))
           case AttackPlanner.Decision.Carry(target) => List(move(target))
       case QuaffleState.HeldBy(id) =>
         val carrier = state.athletes(id).flight.position.value

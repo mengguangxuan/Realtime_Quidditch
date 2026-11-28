@@ -11,6 +11,7 @@ private[logic] object AttackPlanner:
   private val pitch = Pitch.alpine
   private val power = ShotPower(1)
   private val dt = MatchSimulation.stepSeconds
+  private val shootingRange = 23.0
 
   def withQuaffle(state: MatchState, athlete: Athlete, allowed: Set[ControlKind]): Decision =
     val shooter = state.athletes(athlete.id)
@@ -22,61 +23,77 @@ private[logic] object AttackPlanner:
     val opponents = state.setup.roster.filter(_.side != athlete.side)
     val others = state.setup.roster.filterNot(_.id == athlete.id)
     val physics = state.setup.balls.quaffle
-    val pressure = spaceAt(state, opponents, position, 0)
-
     val depth = (goalX - position.x) * direction
-    val shot = Option.when(allowed.contains(ControlKind.Shoot) && depth > 0 && depth <= 23) {
-      // The trial supplies release speed and reach. Forecasts aim centrally without sampling the match's shot seed.
-      val trial = QuaffleRules.shoot(state, athlete, ShotAim(Direction.east, power, None), 0)
-      val speed = (trial.velocity.value - velocity).length
-      val reach = (trial.position.value - position).length
-      pitch.rings.flatMap { ring =>
-        val target = Vec3(goalX, ring.y, ring.height) - position
-        if target.length > 23 then None
-        else
-          Direction.from(target).toOption.flatMap { along =>
-            val travel = (target.length - reach) / math.max(16, speed + velocity.dot(along.value))
-            val aim = target - velocity * travel + Vec3.up * (4.905 * travel * travel)
-            Direction.from(aim).toOption.flatMap { direction =>
-              val shotAim = ShotAim(direction, power, None)
-              val motion = trial.copy(position = Position(position + direction.value * reach),
-                velocity = Velocity(velocity + direction.value * speed))
-              path(state, motion, others, 24).find(_.goal.contains(athlete.side)).flatMap { goal =>
-                val spread = ShotAccuracy.standardDeviation(athlete, shooter, shotAim) * target.length
-                Option.when(goal.clearance >= .35)((shotAim, math.min(goal.clearance, 6) - spread))
+    def possessionValue(point: Vec3, seconds: Double): Double =
+      val progress = (point.x - position.x) * direction
+      val nextDepth = (goalX - point.x) * direction
+      val space = math.min(12, spaceAt(state, opponents, point, seconds))
+      val opensShot = if depth > shootingRange && nextDepth > 0 && nextDepth <= shootingRange then 3.0 else 0.0
+      progress * .65 + space * .5 + opensShot - math.abs(point.y) * .32 - seconds * 2
+
+    val shots: List[(Decision, Double)] =
+      if !allowed.contains(ControlKind.Shoot) || depth <= 0 || depth > shootingRange then Nil
+      else
+        // The trial supplies release speed and reach. Forecasts aim centrally without sampling the match's shot seed.
+        val trial = QuaffleRules.shoot(state, athlete, ShotAim(Direction.east, power, None), 0)
+        val speed = (trial.velocity.value - velocity).length
+        val reach = (trial.position.value - position).length
+        pitch.rings.flatMap { ring =>
+          val target = Vec3(goalX, ring.y, ring.height) - position
+          if target.length > shootingRange then None
+          else
+            Direction.from(target).toOption.flatMap { along =>
+              val travel = (target.length - reach) / math.max(16, speed + velocity.dot(along.value))
+              val aim = target - velocity * travel + Vec3.up * (4.905 * travel * travel)
+              Direction.from(aim).toOption.flatMap { direction =>
+                val shotAim = ShotAim(direction, power, None)
+                val motion = trial.copy(position = Position(position + direction.value * reach),
+                  velocity = Velocity(velocity + direction.value * speed))
+                path(state, motion, others, 24).find(_.goal.contains(athlete.side)).flatMap { goal =>
+                  val spread = ShotAccuracy.standardDeviation(athlete, shooter, shotAim) * target.length
+                  val margin = math.min(goal.clearance, ring.innerRadius - physics.radiusMeters) - spread
+                  Option.when(goal.clearance >= .35)((Decision.Shoot(shotAim), 16 + margin * 3 - goal.tick * dt * 2))
+                }
               }
             }
-          }
-      }.maxByOption(_._2).map(candidate => Decision.Shoot(candidate._1))
-    }.flatten
+        }
 
-    shot.orElse {
-      Option.when(allowed.contains(ControlKind.Pass)) {
-        others.filter(_.side == athlete.side).flatMap { teammate =>
-          val receiver = state.athletes(teammate.id).flight
-          val offset = receiver.position.value - position
-          val progress = offset.x * direction
-          val space = spaceAt(state, opponents, receiver.position.value, .25)
-          val forward = progress >= 9 && space >= math.max(5, pressure - 2)
-          val outlet = pressure < 7 && space >= pressure + 2 && progress >= -5
-          val useful = forward || outlet
-          if offset.length < 4 || offset.length > 24 || !useful || space < 3 then None
-          else
-            val release = QuaffleRules.pass(state, athlete, teammate.id)
-            path(state, release, opponents, 30).takeWhile(_.goal.isEmpty).find { sample =>
-              val predicted = receiver.copy(position = Position(project(receiver, sample.tick * dt)))
-              QuaffleRules.canCatch(teammate, predicted, sample.motion, physics)
-            }.flatMap { caught =>
-              Option.when(caught.clearance >= .85)((teammate.id, space + progress * .45))
-            }
-        }.maxByOption { case (id, value) => (value, -id.value) }.map(candidate => Decision.Pass(candidate._1))
-      }.flatten
-    }.getOrElse {
-      val advance = math.min(pitch.goalPlaneX - 5, position.x * direction + 11) * direction
-      val lanes = List(-10.0, 0.0, 10.0).map(y =>
-        FlightRules.contain(Vec3(advance, y, FlightRules.clamp(position.z, 8, 13)), 1.5))
-      Decision.Carry(lanes.maxBy(point => spaceAt(state, opponents, point, .35) - (point - position).length * .35))
+    val passes: List[(Decision, Double)] =
+      if !allowed.contains(ControlKind.Pass) then Nil
+      else others.filter(_.side == athlete.side).sortBy(_.id.value).flatMap { teammate =>
+        val receiver = state.athletes(teammate.id).flight
+        val distance = (receiver.position.value - position).length
+        if distance < 4 || distance > 24 then None
+        else
+          val release = QuaffleRules.pass(state, athlete, teammate.id)
+          path(state, release, opponents, 30)
+            .takeWhile(sample => sample.goal.isEmpty && sample.clearance >= .85).collectFirst {
+              case sample if QuaffleRules.canCatch(teammate,
+                  receiver.copy(position = Position(project(receiver, sample.tick * dt))), sample.motion, physics) =>
+                val seconds = sample.tick * dt
+                val reception = project(receiver, seconds)
+                val crowding = math.max(0, 5 - spaceAt(state, opponents, reception, seconds))
+                val score = possessionValue(reception, seconds) + math.min(4, sample.clearance) * .5 - crowding * 2 - 3
+                Decision.Pass(teammate.id) -> score
+          }
+      }
+
+    val keeper = state.setup.roles(athlete.id) == AthleteRole.Keeper
+    val limit = if keeper then -pitch.goalPlaneX + 12 else pitch.goalPlaneX - 5
+    val advance = math.min(limit, position.x * direction + 11) * direction
+    val lanes = if allowed.contains(ControlKind.Fly) then List(0.0, position.y, -10.0, 10.0).distinct else Nil
+    val carries: List[(Decision, Double)] = lanes.map { y =>
+      val target = FlightRules.contain(Vec3(advance, y, FlightRules.clamp(position.z, 8, 13)), 1.5)
+      val (arrival, tightest) = (1 to MatchClock.ticksPerSecond).foldLeft((shooter, Double.PositiveInfinity)) {
+        case ((step, clearance), tick) =>
+          val moved = FlightRules.moveAthlete(athlete, step, Some(DefensePlanner.flightTo(step.flight, target)), carrying = true)
+          val gap = spaceAt(state, opponents, moved.flight.position.value, tick * dt)
+          (moved, math.min(clearance, gap))
+      }
+      val score = possessionValue(arrival.flight.position.value, 1) - math.max(0, 5 - tightest) * 3
+      Decision.Carry(target) -> score
     }
+    (shots ++ passes ++ carries).maxByOption(_._2).fold(Decision.Carry(position))(_._1)
 
   private final case class Sample(tick: Int, motion: BallMotion, goal: Option[Side], clearance: Double)
 

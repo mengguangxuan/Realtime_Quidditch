@@ -79,7 +79,7 @@ WHERE athlete_id = 1;
 
 电脑根据持球者的位置、朝向和速度决定守门、封球环路线或逼抢。只在接触方向和相对速度适合时尝试冲撞。球出手后，电脑用真实比赛的球物理预测接下来最多两秒，结合球员自身的飞行规则判断能否赶到。能接稳的球会尝试接球，较快的球则需要实际挡在球路上。算法参考了 [Google Research Football 的球路预测](https://github.com/google-research/football/blob/master/third_party/gfootball_engine/src/onthepitch/ball.cpp) 和 [RoboCup HELIOS 的拦截表](https://github.com/helios-base/librcsc/blob/develop/rcsc/player/intercept_table.cpp)。
 
-电脑持球时按现有物理预测射门和传球路线。球环前有空间时可飞行中出手。射门路线被挡时，优先寻找能接稳球、推进或避开压迫的队友，否则带球换路线。复查时可对照传球事件、接球事件、出手速度和计分。
+电脑持球时同时比较射门、传球和带球。射门看球路的净空和出手误差。传球看能否接稳、球路的净空和接球后的位置。带球用飞行规则向前模拟一秒，比较几条路线能带来的推进、进入射程的机会和沿途受压程度。守门员持球时也走同一套评分，带球目标限制在己方球环附近。
 
 七人制进攻由球队统一分配短接应、远侧拉边、前插和后方接应的位置。自由球阶段每队有一名主要争球人，其他外场电脑球员分散接应。传球已有目标时，由该队的预定接球人优先追球。分配时考虑球员当前的飞行方向和上一帧的站位分工，使接近的选择更稳定。 [Open Soccer 进攻分工](https://github.com/modelence/open-soccer/blob/main/src/client/game/engine.ts#L1892-L1934) · [Google Research Football 的上一目标权重](https://github.com/google-research/football/blob/master/third_party/gfootball_engine/src/onthepitch/AIsupport/AIfunctions.cpp#L635-L645)
 

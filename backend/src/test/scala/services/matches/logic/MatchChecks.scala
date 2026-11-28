@@ -154,6 +154,7 @@ object MatchChecks:
     checkShotsAndBlocks(demo)
     checkCatchPressure(demo)
     checkAttackPlanning()
+    checkCentralCarry()
     checkCompetitionRules(demo)
     checkDefensePlanning(demo)
     checkCoordinatedDefense()
@@ -462,7 +463,7 @@ object MatchChecks:
     val away = state.setup.roster.filter(_.side == Side.Away)
     val shooter = home.head
     val receiver = home.last
-    val allowed = Set(ControlKind.Shoot, ControlKind.Pass)
+    val allowed = Set(ControlKind.Shoot, ControlKind.Pass, ControlKind.Fly)
 
     def scene(positions: (Athlete, Vec3, Vec3)*): MatchState =
       val updated = positions.foldLeft(state.athletes) { case (athletes, (athlete, point, velocity)) =>
@@ -493,6 +494,41 @@ object MatchChecks:
     val trappedLane = outlet.copy(athletes = outlet.athletes.updated(away.head.id,
       blocked.copy(flight = blocked.flight.copy(position = Position(Vec3(15, 4, 10.5))))))
     assert(AttackPlanner.withQuaffle(trappedLane, shooter, allowed).isInstanceOf[AttackPlanner.Decision.Carry])
+
+  private def checkCentralCarry(): Unit =
+    val state = MatchSession.demo(cards, teamSize = 7).latest.state
+    // Recreate the repeated wing pass from the saved seven-a-side match, rounded to centimeters.
+    val flights = List(
+      (1, Vec3(1.28, -12.15, 11.82), Vec3(14.66, -.23, 1.47)),
+      (12, Vec3(5.13, -8.08, 12.75), Vec3(10.36, -1.96, 1.98)),
+      (5, Vec3(-1.65, 9.81, 12.99), Vec3(14.22, -.28, 1.24)),
+      (14, Vec3(9.55, .58, 7.53), Vec3(7.56, 7.30, .51)),
+      (6, Vec3(10.44, -.89, 12.75), Vec3(12.70, -.69, 3.75)),
+      (15, Vec3(8.88, -2.22, 13.77), Vec3(9.83, -2.31, 1.75)),
+      (7, Vec3(15.17, -2.16, 13.05), Vec3(5.30, -3.68, -.23)),
+      (16, Vec3(29.04, 6.33, 13.14), Vec3(-5.25, .13, -.42)),
+      (8, Vec3(10.44, 9.81, 11.96), Vec3(14.22, -.29, 1.27)),
+      (17, Vec3(35.16, -7.78, 10.70), Vec3(1.49, 1.47, -.01)),
+      (9, Vec3(14.92, -12.22, 13.89), Vec3(14.19, -.15, 1.37)),
+      (18, Vec3(34.95, 7.91, 11.29), Vec3(1.29, .10, .38)),
+      (3, Vec3(-41, 0, 9.98), Vec3(0, -.39, .02)),
+      (13, Vec3(41, 0, 10), Vec3.zero)
+    )
+    val athletes = flights.map { (number, position, velocity) =>
+      val id = AthleteId(number)
+      val entry = state.athletes(id)
+      val facing = Direction.from(velocity).getOrElse(entry.flight.facing)
+      id -> entry.copy(flight = FlightState(Position(position), Velocity(velocity), facing))
+    }.toMap
+    val carrier = state.setup.roster.find(_.id == AthleteId(7)).get
+    val scene = state.copy(athletes = athletes,
+      phase = MatchPhase.InPlay(MatchBalls(QuaffleState.HeldBy(carrier.id), SpecialBalls(Map.empty, None))))
+    val allowed = Set(ControlKind.Shoot, ControlKind.Pass, ControlKind.Fly)
+    val withoutCarry = AttackPlanner.withQuaffle(scene, carrier, allowed - ControlKind.Fly)
+    assert(withoutCarry.isInstanceOf[AttackPlanner.Decision.Pass], s"Expected a feasible pass, found $withoutCarry")
+    AttackPlanner.withQuaffle(scene, carrier, allowed) match
+      case AttackPlanner.Decision.Carry(target) => assert(target.x > 21 && math.abs(target.y) <= 3)
+      case other => throw AssertionError(s"Expected a central carry in the open lane, found $other")
 
   private def checkDefensePlanning(demo: MatchState): Unit =
     import DefensePlanner.Decision
