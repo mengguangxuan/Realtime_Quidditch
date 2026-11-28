@@ -191,20 +191,20 @@ func _draw_spectator_overlay() -> void:
 		var point := _camera.unproject_position(_ball.global_position)
 		_spectator_overlay.draw_circle(point, 8, TAG_BACKGROUND, false, 2, true)
 		_spectator_overlay.draw_circle(point, 7, SPECTATOR_BALL, false, 2, true)
-	var home_name := "格兰芬多" if _home_lineup.size() == 7 else "主队"
-	var away_name := "巴塞罗那" if _home_lineup.size() == 7 else "客队"
+	var home_name := _club_name("Home") if _home_lineup.size() == 7 else "主队"
+	var away_name := _club_name("Away") if _home_lineup.size() == 7 else "客队"
 	var font := ThemeDB.fallback_font
 	var baseline := _spectator_overlay.size.y - 22
 	var away_width := font.get_string_size(away_name, HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE).x
 	_spectator_overlay.draw_string_outline(font, Vector2(22, baseline), home_name,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE, 6, TAG_BACKGROUND)
 	_spectator_overlay.draw_string(font, Vector2(22, baseline), home_name,
-		HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE, SPECTATOR_HOME)
+		HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE, _team_accent("Home"))
 	var away_position := Vector2(_spectator_overlay.size.x - 22 - away_width, baseline)
 	_spectator_overlay.draw_string_outline(font, away_position, away_name,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE, 6, TAG_BACKGROUND)
 	_spectator_overlay.draw_string(font, away_position, away_name,
-		HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE, SPECTATOR_AWAY)
+		HORIZONTAL_ALIGNMENT_LEFT, -1, TAG_FONT_SIZE, _team_accent("Away"))
 
 
 func _draw_spectator_names() -> void:
@@ -222,7 +222,7 @@ func _draw_spectator_names() -> void:
 	var plates := _spectator_nameplates(points, area, holder)
 	for id: String in points:
 		var point: Vector2 = points[id]
-		var color := SPECTATOR_HOME if _sides[id] == "Home" else SPECTATOR_AWAY
+		var color := _team_accent(_sides[id])
 		if plates.has(id):
 			var plate: Rect2 = plates[id]
 			_spectator_overlay.draw_line(point, point.clamp(plate.position, plate.end), color, 1.5, true)
@@ -230,7 +230,7 @@ func _draw_spectator_names() -> void:
 		_spectator_overlay.draw_circle(point, 4, color, true, -1, true)
 	for id: String in plates:
 		var plate: Rect2 = plates[id]
-		var accent := SPECTATOR_HOME if _sides[id] == "Home" else SPECTATOR_AWAY
+		var accent := _team_accent(_sides[id])
 		_spectator_overlay.draw_rect(plate, TAG_BACKGROUND)
 		_spectator_overlay.draw_rect(Rect2(plate.position, Vector2(3, plate.size.y)), accent)
 		if id == holder:
@@ -507,8 +507,8 @@ func _update_hud() -> void:
 		var other_view := "全场" if _follow_ball else "跟球"
 		var names := "隐藏姓名" if _show_spectator_names else "显示姓名"
 		_spectator_hint.text = "%s视角   ·   Tab 切换%s   ·   滚轮缩放   ·   N %s" % [view, other_view, names]
-	var home := "格兰芬多" if named_teams else "绿队"
-	var away := "巴塞罗那" if named_teams else "蓝队"
+	var home := _club_name("Home") if named_teams else "绿队"
+	var away := _club_name("Away") if named_teams else "蓝队"
 	var home_caption := home + "电脑" if _spectating else (home if named_teams else "你")
 	var away_caption := away + "电脑" if _spectating else (away if named_teams else "电脑")
 	_score.text = "%s  %d   /   %d  %s      %02d:%02d" % [
@@ -574,20 +574,34 @@ func _update_hud() -> void:
 			_status.text = "追上橙色鬼飞球后按 E 接球"
 
 
+func _is_gryffindor(side: String) -> bool:
+	return (side == "Home") != (current_state["setup"].get("swapTeams") == true)
+
+
+func _club_name(side: String) -> String:
+	return "格兰芬多" if _is_gryffindor(side) else "巴塞罗那"
+
+
+func _team_accent(side: String) -> Color:
+	return SPECTATOR_HOME if _is_gryffindor(side) else SPECTATOR_AWAY
+
+
 func _create_rider(id: String, initial: Vector3, rider_name: String, roster_size: int) -> void:
 	var avatar := Node3D.new()
 	add_child(avatar)
 	var home: bool = _sides[id] == "Home"
 	var kit := Color.TRANSPARENT
 	if roster_size == 14:
-		kit = RiderAssets.HOME_KIT if home else RiderAssets.AWAY_KIT
+		kit = RiderAssets.HOME_KIT if _is_gryffindor(_sides[id]) else RiderAssets.AWAY_KIT
 	var keeper: bool = current_state["setup"]["roles"].get(id) == "Keeper"
 	var visual: Node3D = RiderAssets.create(int(id), kit, keeper)
 	avatar.add_child(visual)
 	_rider_visuals[id] = visual
 	avatar.position = initial
 	avatar.rotation.y = PI / 2.0 if home else -PI / 2.0
-	var badge := _sphere(0.20, Color(0.36, 1.0, 0.57) if home else Color(0.30, 0.66, 1.0), 1.0)
+	var badge_color := _team_accent(_sides[id]) if roster_size == 14 else (
+		Color(0.36, 1.0, 0.57) if home else Color(0.30, 0.66, 1.0))
+	var badge := _sphere(0.20, badge_color, 1.0)
 	badge.visible = not _spectating
 	avatar.add_child(badge)
 	badge.position = Vector3(0, 1.4, 0)

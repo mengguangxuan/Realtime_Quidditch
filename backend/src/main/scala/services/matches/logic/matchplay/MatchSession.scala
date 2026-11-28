@@ -190,6 +190,11 @@ private[matches] object MatchSession:
   val demoTeamSizes = List(1, 2, 7)
   private val expandedCards = (5 to 18).map(AthleteId(_)).toSet
   private val sevenAsideIds = (List(1, 3) ++ (5 to 9) ++ (12 to 18)).map(AthleteId(_)).toSet
+  private val sevenAsideReserves = Set(AthleteId(10), AthleteId(11))
+
+  private[matches] def demoReserves(cards: List[Athlete], teamSize: Int): List[Athlete] =
+    if teamSize == 7 then cards.filter(athlete => sevenAsideReserves.contains(athlete.id)).sortBy(_.id.value)
+    else Nil
 
   private[matches] def demoKeeper(side: Side, teamSize: Int): Option[AthleteId] =
     Option.when(teamSize == 7)(AthleteId(if side == Side.Home then 3 else 13))
@@ -201,15 +206,25 @@ private[matches] object MatchSession:
 
   def demoSetup(cards: List[Athlete], computerOpponent: Boolean, computerHome: Boolean,
       teamSize: Int, selection: Option[AthleteId], homeTactics: TeamTactics = TeamTactics.default,
-      startingPositions: Option[Map[AthleteId, Position]] = None): Either[String, MatchSetup] =
+      startingPositions: Option[Map[AthleteId, Position]] = None, swapTeams: Boolean = false,
+      starters: Option[List[AthleteId]] = None): Either[String, MatchSetup] =
     if !demoTeamSizes.contains(teamSize) then return Left("Team size must be 1, 2 or 7")
+    if teamSize != 7 && (swapTeams || starters.nonEmpty) then return Left("Team and lineup selection requires 7v7")
     val available = demoCards(cards, teamSize)
-    val home = available.filter(_.side == Side.Home)
+    val selectedSide = if swapTeams then Side.Away else Side.Home
+    val opponentSide = MatchRules.opponent(selectedSide)
+    val homeKeeper = demoKeeper(selectedSide, teamSize)
+    val awayKeeper = demoKeeper(opponentSide, teamSize)
+    val homeOptions = (available ++ demoReserves(cards, teamSize)).filter(_.side == selectedSide).sortBy(_.id.value)
+    if starters.exists(ids => ids.size != teamSize || ids.distinct.size != teamSize ||
+        !ids.forall(id => homeOptions.exists(_.id == id)) || !homeKeeper.forall(ids.contains)) then
+      return Left("Choose seven distinct starters from your team, including the keeper")
+    val home = starters.fold(available.filter(_.side == selectedSide))(ids => homeOptions.filter(a => ids.contains(a.id)))
     if selection.exists(id => !home.exists(_.id == id)) then return Left("Choose a home athlete card")
-    val homeKeeper = demoKeeper(Side.Home, teamSize)
-    val awayKeeper = demoKeeper(Side.Away, teamSize)
-    val homeCards = home.sortBy(athlete => (homeKeeper.contains(athlete.id), !selection.contains(athlete.id))).take(teamSize)
-    val awayCards = available.filter(_.side == Side.Away).sortBy(athlete => awayKeeper.contains(athlete.id)).take(teamSize)
+    val homeCards = home.sortBy(athlete => (homeKeeper.contains(athlete.id), !selection.contains(athlete.id)))
+      .take(teamSize).map(_.copy(side = Side.Home))
+    val awayCards = available.filter(_.side == opponentSide).sortBy(athlete => awayKeeper.contains(athlete.id))
+      .take(teamSize).map(_.copy(side = Side.Away))
     if homeCards.size != teamSize || awayCards.size != teamSize then return Left(s"Each side needs $teamSize athlete cards")
     val roster = homeCards.zip(awayCards).flatMap((home, away) => List(home, away))
     val positions = startingPositions.filter(_.nonEmpty)
@@ -217,8 +232,8 @@ private[matches] object MatchSession:
     val homePlayer = Player(PlayerId("home"), Side.Home, if computerHome then PlayerKind.Computer else PlayerKind.Human)
     val awayPlayer = Player(PlayerId("away"), Side.Away, if computerOpponent then PlayerKind.Computer else PlayerKind.Human)
     val homePilot = homeCards.find(athlete => selection.contains(athlete.id)).getOrElse(homeCards.head)
-    val starters = List(homePilot, awayCards.head)
-    val supporting = roster.filterNot(starters.contains)
+    val initialPilots = List(homePilot, awayCards.head)
+    val supporting = roster.filterNot(initialPilots.contains)
     val players = List(homePlayer, awayPlayer) ++ supporting.map(athlete =>
       Player(PlayerId(s"support-${athlete.id.value}"), athlete.side, PlayerKind.Computer))
     positions.fold[Either[String, Unit]](Right(()))(MatchSimulation.startingPositionsValid(roster, _)).map { _ =>
@@ -228,7 +243,7 @@ private[matches] object MatchSession:
             else AthleteRole.Chaser
           athlete.id -> role
         }.toMap,
-        players.zip(starters ++ supporting).map((player, athlete) => ControlAssignment(player.id, athlete.id, allowed)),
+        players.zip(initialPilots ++ supporting).map((player, athlete) => ControlAssignment(player.id, athlete.id, allowed)),
         BallSetup(BallPhysics(.15, .6, .002, .0001), Map.empty, None),
-        Some(MatchTactics(homeTactics, TeamTactics.default)), positions)
+        Some(MatchTactics(homeTactics, TeamTactics.default)), positions, Option.when(swapTeams)(true))
     }

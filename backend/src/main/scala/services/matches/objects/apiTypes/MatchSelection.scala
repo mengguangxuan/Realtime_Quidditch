@@ -9,7 +9,9 @@ final case class MatchSelection(
   watch: Boolean,
   athlete: AthleteId,
   tactics: Option[TeamTactics] = None,
-  startingPositions: Option[Map[AthleteId, Position]] = None
+  startingPositions: Option[Map[AthleteId, Position]] = None,
+  swapTeams: Option[Boolean] = None,
+  starters: Option[List[AthleteId]] = None
 )
 
 object MatchSelection:

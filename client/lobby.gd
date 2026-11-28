@@ -8,6 +8,12 @@ const INK := Color("#f1eee0")
 var token := ""
 var _request := HTTPRequest.new()
 var _modes := OptionButton.new()
+var _team := OptionButton.new()
+var _starter_panel := VBoxContainer.new()
+var _starter_choices := HFlowContainer.new()
+var _starter_count: Label
+var _starters: Dictionary = {}
+var _roster_key := ""
 var _tactics_panel := HBoxContainer.new()
 var _attack_support := OptionButton.new()
 var _defense := OptionButton.new()
@@ -22,6 +28,8 @@ var _preview := Node3D.new()
 var _formation_panel := VBoxContainer.new()
 var _formation_player := OptionButton.new()
 var _formation_pitch := Control.new()
+var _dragging := -1
+var _drag_point := Vector2.ZERO
 var _formation_status := Label.new()
 var _positioning: Dictionary = {}
 var _lineups: Dictionary = {}
@@ -56,11 +64,19 @@ func _ready() -> void:
 	_label(form, "对战模式", 18, INK)
 	_modes.custom_minimum_size.y = 46
 	_modes.disabled = true
-	form.add_child(_modes)
+	var mode_row := HBoxContainer.new()
+	_modes.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mode_row.add_child(_modes)
+	_team.add_item("格兰芬多")
+	_team.add_item("巴塞罗那")
+	_team.item_selected.connect(_mode_changed)
+	_team.hide()
+	mode_row.add_child(_team)
+	form.add_child(mode_row)
 	_tactics_panel.add_theme_constant_override("separation", 12)
 	form.add_child(_tactics_panel)
-	_add_tactics_option(_attack_support, "格兰芬多进攻接应", ["拉开接应", "近距离接应"], ["Wide", "Nearby"])
-	_add_tactics_option(_defense, "格兰芬多防守", ["上前逼抢", "回撤保护"], ["Pressure", "Cover"])
+	_add_tactics_option(_attack_support, "我方进攻接应", ["拉开接应", "近距离接应"], ["Wide", "Nearby"])
+	_add_tactics_option(_defense, "我方防守", ["上前逼抢", "回撤保护"], ["Pressure", "Cover"])
 	_modes.item_selected.connect(_mode_changed)
 	_tactics_panel.hide()
 	_home_caption = _label(form, "选择格兰芬多首发球员", 18, INK)
@@ -86,6 +102,10 @@ func _ready() -> void:
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right.add_theme_constant_override("separation", 12)
 	layout.add_child(right)
+	right.add_child(_starter_panel)
+	_starter_count = _label(_starter_panel, "", 17, GOLD)
+	_starter_panel.add_child(_starter_choices)
+	_starter_panel.hide()
 	_create_formation_editor(right)
 	_create_preview(right)
 	add_child(_request)
@@ -114,18 +134,39 @@ func _mode_changed(_index: int) -> void:
 	var mode := _mode()
 	var team_size := int(mode["teamSize"])
 	var lineup: Dictionary = _lineups[str(team_size)]
-	_cards = lineup["cards"]
+	_team.visible = team_size == 7
+	var swap := team_size == 7 and _team.selected == 1
+	var key := "%d/%s" % [team_size, swap]
+	var original_home := "Away" if swap else "Home"
+	if _roster_key != key:
+		_roster_key = key
+		_formation_edits.clear()
+		_starters.clear()
+		for card: Dictionary in lineup["cards"]:
+			if card["side"] == original_home:
+				_starters[int(card["id"])] = true
+	_cards = []
+	var pool: Array = lineup["cards"] + lineup.get("reserves", [])
+	pool.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a["id"] < b["id"])
+	for original: Dictionary in pool:
+		if original["side"] != original_home and lineup.get("reserves", []).has(original):
+			continue
+		var card := original.duplicate()
+		card["side"] = "Home" if original["side"] == original_home else "Away"
+		_cards.append(card)
 	_slots = lineup["slots"]
 	_keepers = lineup.get("keepers", [])
 	_tactics_panel.visible = team_size > 1
-	_home_caption.text = "选择格兰芬多首位球员" if mode["watch"] else "选择格兰芬多首发操控球员"
-	_away_caption.text = "查看巴塞罗那球员" if team_size == 7 else "查看斯莱特林球员"
+	_home_caption.text = "选择我方首位球员" if mode["watch"] else "选择开场操控球员"
+	_away_caption.text = "查看" + (("格兰芬多" if swap else "巴塞罗那") if team_size == 7 else "斯莱特林") + "球员"
+	_starter_panel.visible = team_size == 7
+	_show_starter_choices()
 	_show_cards()
 
 
 func _create_formation_editor(parent: Control) -> void:
 	parent.add_child(_formation_panel)
-	_label(_formation_panel, "格兰芬多开场站位", 18, GOLD)
+	_label(_formation_panel, "我方开场站位", 18, GOLD)
 	var actions := HBoxContainer.new()
 	_formation_panel.add_child(actions)
 	_formation_player.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -146,10 +187,12 @@ func _create_formation_editor(parent: Control) -> void:
 
 
 func _refresh_opening_players() -> void:
+	_dragging = -1
 	_opening_players.clear()
 	_formation_player.clear()
 	if _chosen.is_empty() or _positioning.is_empty():
-		_play.disabled = _starting or _chosen.is_empty()
+		_play.disabled = true
+		_formation_pitch.queue_redraw()
 		return
 	if not _keepers.has(_chosen["id"]):
 		_opening_players.append(_chosen)
@@ -160,6 +203,8 @@ func _refresh_opening_players() -> void:
 			break
 		if card["side"] != "Home":
 			continue
+		if team_size == 7 and not _starters.has(int(card["id"])):
+			continue
 		if _keepers.has(card["id"]):
 			keeper = card
 		elif card["id"] != _chosen["id"]:
@@ -169,7 +214,7 @@ func _refresh_opening_players() -> void:
 	for card: Dictionary in _opening_players:
 		_formation_player.add_item(card["name"] + (" · 守门员" if _keepers.has(card["id"]) else ""))
 	if _opening_players.size() < team_size:
-		_formation_status.text = "格兰芬多球员卡不足。"
+		_formation_status.text = "选满 %d 名首发后即可开赛。" % team_size
 		_play.disabled = true
 		_formation_pitch.queue_redraw()
 		return
@@ -178,7 +223,7 @@ func _refresh_opening_players() -> void:
 			_formation_player.select(index)
 			break
 	var valid := _valid_formation()
-	_formation_status.text = "选球员后，点击左侧可用区域摆位。" if valid else "球员站位太近，请调整或恢复默认。"
+	_formation_status.text = "按住球员标记，拖到左侧可用区域。" if valid else "球员站位太近，请调整或恢复默认。"
 	_play.disabled = _starting or not valid
 	_formation_pitch.queue_redraw()
 
@@ -231,7 +276,7 @@ func _draw_formation() -> void:
 	_formation_pitch.draw_line(_map_position(Vector2(0, -extents.y)), _map_position(Vector2(0, extents.y)),
 		Color("#a6b7a5"), 1)
 	for index in _opening_players.size():
-		var point := _map_position(_starting_point(index))
+		var point := _drag_point if index == _dragging else _map_position(_starting_point(index))
 		var selected := index == _formation_player.selected
 		_formation_pitch.draw_circle(point, 7 if selected else 5, GOLD if selected else INK)
 		var caption := str(_opening_players[index]["name"]).get_slice(" ", 0)
@@ -240,25 +285,50 @@ func _draw_formation() -> void:
 
 
 func _place_player(event: InputEvent) -> void:
-	if _starting or _active_match or _formation_player.selected < 0 or _positioning.is_empty():
+	if _starting or _active_match or _opening_players.is_empty() or _positioning.is_empty():
 		return
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		var rect := _pitch_rect()
-		var point: Vector2 = (event.position - rect.get_center()) * 2 / rect.size * _field_extents()
-		if (point.x < -float(_positioning["goalPlaneX"]) or point.x > -float(_positioning["clearance"])
-				or (point / _field_extents()).length() > 1):
-			_formation_status.text = "请选择左侧标出的站位区域。"
-			return
-		var selected := _formation_player.selected
-		for index in _opening_players.size():
-			if index != selected and point.distance_to(_starting_point(index)) < float(_positioning["spacing"]):
-				_formation_status.text = "与队友至少保持 %d 米。" % int(_positioning["spacing"])
-				return
-		_formation_edits[int(_opening_players[selected]["id"])] = point
-		_formation_status.text = "已更新 %s 的开场站位。" % _opening_players[selected]["name"]
-		_play.disabled = not _valid_formation()
+	if event is InputEventMouseMotion and _dragging >= 0:
+		_drag_point = event.position
 		_formation_pitch.queue_redraw()
 		_formation_pitch.accept_event()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			var nearest := 9.0
+			for index in _opening_players.size():
+				var distance: float = event.position.distance_to(_map_position(_starting_point(index)))
+				if distance < nearest:
+					nearest = distance
+					_dragging = index
+			if _dragging >= 0:
+				_drag_point = event.position
+				_formation_player.select(_dragging)
+				_formation_pitch.queue_redraw()
+			elif _formation_player.selected >= 0:
+				_commit_formation_point(_formation_player.selected, event.position)
+		elif _dragging >= 0:
+			var index := _dragging
+			_dragging = -1
+			if event.position.distance_to(_map_position(_starting_point(index))) > 1:
+				_commit_formation_point(index, event.position)
+			_formation_pitch.queue_redraw()
+		_formation_pitch.accept_event()
+
+
+func _commit_formation_point(selected: int, at: Vector2) -> void:
+	var rect := _pitch_rect()
+	var point := (at - rect.get_center()) * 2 / rect.size * _field_extents()
+	if (point.x < -float(_positioning["goalPlaneX"]) or point.x > -float(_positioning["clearance"])
+			or (point / _field_extents()).length() > 1):
+		_formation_status.text = "请选择左侧标出的站位区域。"
+		return
+	for index in _opening_players.size():
+		if index != selected and point.distance_to(_starting_point(index)) < float(_positioning["spacing"]):
+			_formation_status.text = "与队友至少保持 %d 米。" % int(_positioning["spacing"])
+			return
+	_formation_edits[int(_opening_players[selected]["id"])] = point
+	_formation_status.text = "已更新 %s 的开场站位。" % _opening_players[selected]["name"]
+	_play.disabled = _opening_players.size() != int(_mode()["teamSize"]) or not _valid_formation()
+	_formation_pitch.queue_redraw()
 
 
 func _select_tactic(option: OptionButton, value: String) -> void:
@@ -310,12 +380,49 @@ func _headers() -> PackedStringArray:
 	return ["Authorization: Bearer " + token, "Content-Type: application/json"]
 
 
+func _show_starter_choices() -> void:
+	for child in _starter_choices.get_children():
+		_starter_choices.remove_child(child)
+		child.queue_free()
+	if not _starter_panel.visible:
+		return
+	_starter_count.text = "首发名单  %d / 7" % _starters.size()
+	for card: Dictionary in _cards:
+		if card["side"] != "Home":
+			continue
+		var id := int(card["id"])
+		var keeper := _keepers.has(card["id"])
+		var button := CheckBox.new()
+		button.text = card["name"]
+		button.tooltip_text = "守门员必须首发" if keeper else ""
+		button.button_pressed = _starters.has(id)
+		button.disabled = keeper or _starting or _active_match
+		button.toggled.connect(_toggle_starter.bind(id, button))
+		_starter_choices.add_child(button)
+
+
+func _toggle_starter(selected: bool, id: int, button: CheckBox) -> void:
+	if selected and _starters.size() >= 7:
+		button.set_pressed_no_signal(false)
+		_formation_status.text = "请先取消一名首发，再勾选替补。"
+		return
+	if selected:
+		_starters[id] = true
+	else:
+		_starters.erase(id)
+		_formation_edits.erase(id)
+	_starter_count.text = "首发名单  %d / 7" % _starters.size()
+	_show_cards()
+
+
 func _show_cards() -> void:
 	var previous := int(_chosen.get("id", 0))
 	_chosen = {}
 	_home_cards.clear()
 	_away_cards.clear()
 	for card: Dictionary in _cards:
+		if card["side"] == "Home" and int(_mode()["teamSize"]) == 7 and not _starters.has(int(card["id"])):
+			continue
 		var option := _home_cards if card["side"] == "Home" else _away_cards
 		option.add_item(card["name"])
 		option.set_item_metadata(option.item_count - 1, card)
@@ -352,7 +459,8 @@ func _show_card(card: Dictionary) -> void:
 		child.queue_free()
 	var kit := Color.TRANSPARENT
 	if int(_mode()["teamSize"]) == 7:
-		kit = RiderAssets.HOME_KIT if card["side"] == "Home" else RiderAssets.AWAY_KIT
+		var gryffindor: bool = (card["side"] == "Home") != (_team.selected == 1)
+		kit = RiderAssets.HOME_KIT if gryffindor else RiderAssets.AWAY_KIT
 	_preview.add_child(RiderAssets.create(int(card["id"]), kit, _keepers.has(card["id"])))
 
 
@@ -365,6 +473,9 @@ func _start() -> void:
 	_set_starting(true)
 	_status.text = "正在开赛…"
 	var payload := {"athlete": int(_chosen["id"]), "teamSize": _mode()["teamSize"], "watch": _mode()["watch"]}
+	if int(_mode()["teamSize"]) == 7:
+		payload["swapTeams"] = _team.selected == 1
+		payload["starters"] = _starters.keys()
 	if _tactics_panel.visible:
 		payload["tactics"] = {
 			"attackSupport": _attack_support.get_item_metadata(_attack_support.selected),
@@ -390,6 +501,8 @@ func _set_starting(starting: bool) -> void:
 	_play.disabled = starting
 	_modes.disabled = starting
 	_home_cards.disabled = starting
+	_team.disabled = starting
+	_show_starter_choices()
 
 
 func _completed(result: int, code: int, _response_headers: PackedStringArray, body: PackedByteArray) -> void:
@@ -409,6 +522,7 @@ func _completed(result: int, code: int, _response_headers: PackedStringArray, bo
 		return
 	_lineups = data["lineups"]
 	_positioning = data.get("positioning", {})
+	_team.select(1 if data.get("swapTeams", false) else 0)
 	var sizes := _lineups.keys()
 	sizes.sort()
 	for watch: bool in [false, true]:
@@ -430,10 +544,12 @@ func _completed(result: int, code: int, _response_headers: PackedStringArray, bo
 		_play.text = "返回赛场"
 		_play.disabled = false
 		_modes.disabled = true
+		_team.disabled = true
 		_attack_support.disabled = true
 		_defense.disabled = true
 		_home_cards.disabled = true
 		_formation_panel.hide()
+		_starter_panel.hide()
 		_status.text = "本场阵容已确定。"
 	else:
 		_status.text = "" if not _chosen.is_empty() else "没有可选球员卡。"

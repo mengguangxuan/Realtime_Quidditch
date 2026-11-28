@@ -54,6 +54,15 @@ object MatchChecks:
     val ron = MatchSession.demoSetup(cards, true, false, 7, Some(AthleteId(3))).toOption.get
     assert(ron.assignments.find(_.player == PlayerId("home")).get.athlete == goalieId)
     assert(MatchSession.demoSetup(cards, true, false, 7, Some(AthleteId(10))).isLeft)
+    val barcelona = MatchSession.demoSetup(cards, true, false, 7, Some(AthleteId(13)),
+      swapTeams = true, starters = Some((12 to 18).map(AthleteId(_)).toList)).toOption.get
+    assert(barcelona.swapTeams.contains(true) && barcelona.roster.filter(_.side == Side.Home).last.id == AthleteId(13))
+    assert(barcelona.roles.filter(_._2 == AthleteRole.Keeper).keySet == Set(AthleteId(3), AthleteId(13)))
+    val customStarters = List(1, 3, 6, 7, 8, 10, 11).map(AthleteId(_))
+    assert(MatchSession.demoSetup(cards, true, false, 7, Some(AthleteId(11)), starters = Some(customStarters)).isRight)
+    for invalid <- List(customStarters.init, customStarters.init :+ AthleteId(1), customStarters.init :+ AthleteId(12),
+        customStarters.filterNot(_ == AthleteId(3)) :+ AthleteId(5)) do
+      assert(MatchSession.demoSetup(cards, true, false, 7, None, starters = Some(invalid)).isLeft)
     assert(roster.map(_.id).distinct.size == 4 && roster.map(_.ratings).distinct.size == 4)
     assert(roster.count(_.side == Side.Home) == 2 && roster.count(_.side == Side.Away) == 2)
     val home = PlayerId("home")

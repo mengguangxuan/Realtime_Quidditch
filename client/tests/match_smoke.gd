@@ -62,6 +62,24 @@ func _run() -> void:
 		if lobby._opening_players.size() != 7 or lobby._away_cards.item_count != 7:
 			_fail("Switching back to 7v7 did not load both teams")
 			return
+		if watch:
+			var choices: Array[Node] = lobby._starter_choices.get_children()
+			var ginny := choices.filter(func(button: CheckBox) -> bool: return button.text == "Ginny Weasley")
+			var fred := choices.filter(func(button: CheckBox) -> bool: return button.text == "Fred Weasley")
+			if ginny.is_empty() or fred.is_empty():
+				_fail("The lobby did not offer the full Gryffindor lineup")
+				return
+			ginny[0].button_pressed = false
+			if not lobby._play.disabled:
+				_fail("The match could start with only six players")
+				return
+			fred[0].button_pressed = true
+		else:
+			lobby._team.select(1)
+			lobby._team.item_selected.emit(1)
+			if int(lobby._chosen["id"]) != 12:
+				_fail("Selecting Barcelona did not load its controlled lineup")
+				return
 	if (watch or team_size == 7) and lobby._home_cards.item_count > 1:
 		lobby._home_cards.select(1)
 		lobby._home_cards.item_selected.emit(1)
@@ -85,11 +103,25 @@ func _run() -> void:
 			var click := InputEventMouseButton.new()
 			click.button_index = MOUSE_BUTTON_LEFT
 			click.pressed = true
+			var from: Vector2 = lobby._map_position(lobby._starting_point(team_size - 1))
+			click.position = from
+			lobby._place_player(click)
+			click.pressed = false
 			click.position = lobby._map_position(lobby._starting_point(0))
 			lobby._place_player(click)
 			if lobby._formation_edits.has(positioned):
 				_fail("Overlapping starting positions were accepted")
 				return
+			click.pressed = true
+			click.position = from
+			lobby._place_player(click)
+			var motion := InputEventMouseMotion.new()
+			motion.position = lobby._map_position(opening_point)
+			lobby._place_player(motion)
+			if lobby._formation_edits.has(positioned):
+				_fail("Dragging submitted a position before release")
+				return
+			click.pressed = false
 			click.position = lobby._map_position(opening_point)
 			lobby._place_player(click)
 			if not lobby._formation_edits.has(positioned):
@@ -125,6 +157,13 @@ func _run() -> void:
 	if game._roster.size() != team_size * 2 or game._home_lineup.size() != team_size or game._spectating != watch:
 		_fail("The game scene did not load the selected lineup and mode")
 		return
+	if team_size == 7:
+		if watch and (not game._home_lineup.has("10") or game._roster.has("5")):
+			_fail("The backend did not start the selected Gryffindor seven")
+			return
+		if not watch and (game._club_name("Home") != "巴塞罗那" or not game._home_lineup.has("13")):
+			_fail("The backend did not give the human Barcelona, including its keeper")
+			return
 	var tactics: Dictionary = game.current_state["setup"]["tactics"]
 	var home_tactics: Dictionary = {"attackSupport": "Nearby", "defense": "Cover"} if team_play else {
 		"attackSupport": "Wide", "defense": "Pressure"}
@@ -146,7 +185,8 @@ func _run() -> void:
 			if team_size != 7:
 				return material is BaseMaterial3D and material.albedo_texture != null
 			var keeper: bool = game.current_state["setup"]["roles"][id] == "Keeper"
-			var kit := RiderAssets.HOME_KIT if game._sides[id] == "Home" else RiderAssets.AWAY_KIT
+			var original_home: bool = (game._sides[id] == "Home") != (team_size == 7 and not watch)
+			var kit := RiderAssets.HOME_KIT if original_home else RiderAssets.AWAY_KIT
 			return (material is ShaderMaterial and material.get_shader_parameter("original_texture") != null
 				and material.get_shader_parameter("kit_color") == kit and material.get_shader_parameter("keeper") == keeper)):
 			_fail("A rider had the wrong team kit or was imported without its texture")

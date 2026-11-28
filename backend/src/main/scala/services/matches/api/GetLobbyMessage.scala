@@ -19,7 +19,8 @@ final case class GetLobbyMessage(private val session: MatchSession) extends NoRe
       val lineups = MatchSession.demoTeamSizes.map { size =>
         val slots = List.tabulate(size)(index => MatchSimulation.startingSlot(Side.Home, index, size))
         val keepers = Side.values.toList.flatMap(side => MatchSession.demoKeeper(side, size))
-        size.toString -> LobbyLineup(MatchSession.demoCards(available, size), slots, keepers)
+        size.toString -> LobbyLineup(MatchSession.demoCards(available, size), slots, keepers,
+          MatchSession.demoReserves(available, size))
       }.toMap
       val pitch = Pitch.alpine
       val smallSlots = List.tabulate(smallRoster.count(_.side == Side.Home))(index =>
@@ -27,4 +28,4 @@ final case class GetLobbyMessage(private val session: MatchSession) extends NoRe
       val positioning = LobbyPositioning(smallSlots, pitch.halfLength, pitch.halfWidth, pitch.goalPlaneX,
         MatchSimulation.startingClearance, MatchSimulation.startingSpacing)
       MatchLobby(smallRoster, lineups, setup.roster.size / 2, setup.players.forall(_.kind == PlayerKind.Computer),
-        state.phase != MatchPhase.Ready, setup.tacticsFor(Side.Home), positioning)
+        state.phase != MatchPhase.Ready, setup.tacticsFor(Side.Home), positioning, setup.swapTeams.contains(true))

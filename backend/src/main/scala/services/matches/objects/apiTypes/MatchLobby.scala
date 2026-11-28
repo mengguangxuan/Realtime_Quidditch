@@ -5,7 +5,7 @@ import io.circe.generic.semiauto.deriveCodec
 import services.matches.objects.{Athlete, TeamTactics}
 
 final case class MatchLobby(cards: List[Athlete], lineups: Map[String, LobbyLineup], teamSize: Int,
-    watch: Boolean, active: Boolean, homeTactics: TeamTactics, positioning: LobbyPositioning)
+    watch: Boolean, active: Boolean, homeTactics: TeamTactics, positioning: LobbyPositioning, swapTeams: Boolean)
 
 object MatchLobby:
   given Codec.AsObject[MatchLobby] = deriveCodec[MatchLobby]

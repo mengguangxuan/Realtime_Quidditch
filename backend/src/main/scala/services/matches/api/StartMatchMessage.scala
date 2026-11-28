@@ -21,7 +21,7 @@ final case class StartMatchMessage(selection: Either[String, Option[MatchSelecti
           case Right(Some(choice)) => AthleteCardTable.list(connection).map { cards =>
             MatchSession.demoSetup(cards, computerOpponent || choice.watch, choice.watch,
               choice.teamSize, Some(choice.athlete), choice.tactics.getOrElse(TeamTactics.default),
-              choice.startingPositions).map(Some(_))
+              choice.startingPositions, choice.swapTeams.contains(true), choice.starters).map(Some(_))
           }
         lineup.flatMap {
           case Left(reason) => IO.pure(Left(reason))

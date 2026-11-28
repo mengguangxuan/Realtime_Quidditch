@@ -37,7 +37,8 @@ final case class MatchSetup(
   assignments: List[ControlAssignment],
   balls: BallSetup,
   tactics: Option[MatchTactics] = None,
-  startingPositions: Option[Map[AthleteId, Position]] = None
+  startingPositions: Option[Map[AthleteId, Position]] = None,
+  swapTeams: Option[Boolean] = None
 ):
   def tacticsFor(side: Side): TeamTactics =
     tactics.fold(TeamTactics.default)(_.forSide(side))
