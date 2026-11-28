@@ -158,6 +158,7 @@ object MatchChecks:
     checkDefensePlanning(demo)
     checkCoordinatedDefense()
     checkTeamPressureAssignments()
+    checkPrimaryPress()
     checkSevenAsideSupport()
     checkTeamTactics()
     val solo = MatchSession.demo(cards, computerOpponent = true, shotSeed = 42)
@@ -742,6 +743,57 @@ object MatchChecks:
       val coverTasks = TeamDefense.plan(coverState, ball, None)
       assert(coverTasks.keySet == tasks.keySet)
       assert(coverTasks.values.count(_.isInstanceOf[TeamDefense.Task.CoverZone]) == 6)
+
+  private def checkPrimaryPress(): Unit =
+    import DefensePlanner.Decision
+    val state = MatchSession.demo(cards, teamSize = 7, computerHome = true, computerOpponent = true).latest.state
+    for side <- Side.values do
+      val towardGoal = if side == Side.Home then -1 else 1
+      val (ahead, behind) = state.setup.roster.filter(athlete =>
+        athlete.side == side && state.setup.roles(athlete.id) != AthleteRole.Keeper) match
+        case first :: second :: _ => (first, second)
+        case _ => throw AssertionError("Expected at least two defenders")
+      val carrier = state.setup.roster.find(_.side != side).get.id
+      val facing = if towardGoal > 0 then Direction.east else Direction.west
+      def placed(id: AthleteId, x: Double, y: Double, height: Double, speed: Double): (AthleteId, AthleteState) =
+        id -> state.athletes(id).copy(flight = FlightState(
+          Position(Vec3(towardGoal * x, y, height)), Velocity(Vec3(towardGoal * speed, 0, 0)), facing))
+      val ball = QuaffleState.HeldBy(carrier)
+      val remote = state.setup.roster.filter(_.side == side).map(athlete => placed(athlete.id, 38, 12, 12, 0))
+      val arranged = state.copy(athletes = state.athletes ++ remote ++ List(
+        placed(carrier, 0, 0, 10, 5), placed(ahead.id, 5, 0, 10, 5), placed(behind.id, -1, 0, 10, 0)))
+      def marker(scene: MatchState, previous: AthleteId) =
+        TeamDefense.marker(TeamDefense.plan(scene, ball, Some(previous)))
+      assert(marker(arranged, behind.id).contains(ahead.id))
+      val closeAlternative = arranged.copy(athletes = arranged.athletes + placed(behind.id, 4, 0, 10, 5))
+      assert(marker(closeAlternative, ahead.id).contains(ahead.id))
+      val overrun = closeAlternative.copy(athletes = closeAlternative.athletes + placed(ahead.id, -4, 0, 10, 0))
+      assert(marker(overrun, ahead.id).contains(behind.id))
+      val highAlternative = arranged.copy(athletes = arranged.athletes + placed(behind.id, 4, 0, 19, 5))
+      assert(marker(highAlternative, behind.id).contains(ahead.id))
+      val cover = TeamTactics.default.copy(defense = DefensiveApproach.Cover)
+      val covering = arranged.copy(setup = state.setup.copy(tactics = Some(MatchTactics(cover, cover))))
+      for scene <- List(arranged, covering) do
+        DefensePlanner.againstCarrier(scene, ahead, carrier) match
+          case Decision.CoverShotLane(_, _, target) =>
+            assert(target.value.x * towardGoal > 2 && target.value.x * towardGoal < 8)
+          case other => throw AssertionError(s"Expected $side to hold its position near the carrier, got $other")
+      val contact = covering.copy(athletes = covering.athletes + placed(ahead.id, 2.2, 0, 10, -4))
+      assert(DefensePlanner.againstCarrier(contact, ahead, carrier).isInstanceOf[Decision.Challenge])
+
+      val assignment = state.controls.find(_.athlete == ahead.id).get
+      val balls = MatchBalls(ball, SpecialBalls(Map.empty, None))
+      val tracking = covering.copy(athletes = covering.athletes ++ List(
+        placed(carrier, 0, 0, 10, 10), placed(ahead.id, 5, 0, 10, 10)))
+      (1 to 20).foldLeft(tracking) { (scene, tick) =>
+        val drive = ComputerPilot.controls(scene, balls, assignment, defensiveTask = Some(TeamDefense.Task.MarkCarrier))
+          .collectFirst { case Control.Fly(input) => input }.get
+        val moved = FlightRules.moveAthlete(ahead, scene.athletes(ahead.id), Some(drive), carrying = false)
+        val carrierDepth = tick * .5
+        val lead = moved.flight.position.value.x * towardGoal - carrierDepth
+        assert(lead >= 1 && lead <= 7, s"$side lost its goal-side position after $tick ticks: $lead")
+        scene.copy(athletes = scene.athletes + (ahead.id -> moved) + placed(carrier, carrierDepth, 0, 10, 10))
+      }
 
   private def checkTeamTactics(): Unit =
     val setup = MatchSession.demo(cards, teamSize = 2).latest.state.setup

@@ -19,12 +19,14 @@ private[matches] object TeamDefense:
         val defending = team.filter(athlete => state.setup.roles(athlete.id) != AthleteRole.Keeper)
         if defending.isEmpty then return Map.empty
         val ball = state.athletes(carrier).flight.position.value
-        val distances = defending.map(athlete =>
-          athlete -> (state.athletes(athlete.id).flight.position.value - ball).length)
-        val (closest, distance) = distances.minBy { case (athlete, gap) => (gap, athlete.id.value) }
-        val marker = distances.find { case (athlete, gap) =>
-          previous.contains(athlete.id) && gap <= distance + 3
-        }.fold(closest)(_._1)
+        val coordinated = team.size > 2
+        val costs = if coordinated then DefensePlanner.pressureCosts(state, defending, carrier)
+          else defending.map(athlete => athlete -> (state.athletes(athlete.id).flight.position.value - ball).length)
+        val (best, cost) = costs.minBy { case (athlete, score) => (score, athlete.id.value) }
+        val handoffMargin = if coordinated then 2.0 else 3.0
+        val marker = costs.find { case (athlete, score) =>
+          previous.contains(athlete.id) && score <= cost + handoffMargin
+        }.fold(best)(_._1)
         val goalClearance = if team.size > defending.size then taskSpacing else 0.0
         distribute(state, carrier, ball, marker, defending.filterNot(_.id == marker.id), goalClearance)
 

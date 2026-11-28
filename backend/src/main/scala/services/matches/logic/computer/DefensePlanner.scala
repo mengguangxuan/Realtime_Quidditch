@@ -29,6 +29,32 @@ private[matches] object DefensePlanner:
   private def ownGoal(athlete: Athlete): Double =
     if athlete.side == Side.Home then -pitch.goalPlaneX else pitch.goalPlaneX
 
+  private def threatenedRing(opponent: FlightState, predicted: Vec3, goalX: Double): GoalRing =
+    pitch.rings.maxBy { ring =>
+      val offset = Vec3(goalX, ring.y, ring.height) - predicted
+      Direction.from(offset).getOrElse(opponent.facing).value.dot(opponent.facing.value) - offset.length * .012
+    }
+
+  private def pressurePosition(opponent: FlightState, goalX: Double): (GoalRing, Vec3, Vec3) =
+    val ball = contain(opponent.position.value + opponent.velocity.value * .35, 1.5)
+    val ring = threatenedRing(opponent, ball, goalX)
+    val toGoal = Vec3(goalX, ring.y, ring.height) - ball
+    val inward = if goalX > 0 then Direction.east else Direction.west
+    val axis = Direction.from(toGoal).getOrElse(inward).value
+    val depth = clamp(toGoal.dot(axis) * .5, 0, 3)
+    (ring, contain(ball + axis * depth - bodyCenter, 1.5), axis)
+
+  def pressureCosts(state: MatchState, defending: List[Athlete], carrier: AthleteId): List[(Athlete, Double)] =
+    val opponent = state.athletes(carrier).flight
+    val (_, target, axis) = pressurePosition(opponent, ownGoal(defending.head))
+    val projectedCarrier = contain(opponent.position.value + opponent.velocity.value * .35, 1.5)
+    defending.map { athlete =>
+      val start = state.athletes(athlete.id)
+      val projected = projectFlight(athlete, start, target, 7, sprint = true).flight.position.value
+      val behind = math.max(0, (projectedCarrier - projected).dot(axis))
+      athlete -> ((projected - target).length + behind * 1.5)
+    }
+
   def guardGoal(athlete: Athlete, ball: Vec3): Decision =
     val goalX = ownGoal(athlete)
     val nearGoal = math.abs(ball.x - goalX) <= 24
@@ -63,8 +89,19 @@ private[matches] object DefensePlanner:
       impulse < 23 && distance <= math.min(3.6, 1.30 + closing * .20)
     val prediction = contain(point + opponent.velocity.value * .45, 1.5)
     val pressure = state.setup.tacticsFor(athlete.side).defense == DefensiveApproach.Pressure
-    val hasCover = state.setup.roster.exists(teammate => teammate.side == athlete.side && teammate.id != athlete.id)
-    if pressure && legalContact then Decision.Challenge(carrier, Position(prediction))
+    val teamSize = state.setup.roster.count(_.side == athlete.side)
+    val hasCover = teamSize > 1
+    val (ring, cutoff, axis) = pressurePosition(opponent, goalX)
+    val onGoalSide = toCarrier.dot(axis) <= -.25
+    val containsCarrier = onGoalSide && distance <= 9 && (defender.position.value - cutoff).length <= 6
+    if legalContact && (pressure || (teamSize > 2 && containsCarrier)) then
+      Decision.Challenge(carrier, Position(prediction))
+    else if teamSize > 2 && advanced > 0 && containsCarrier then
+      // Give the flight controller enough lead to track a moving carrier without braking out of the lane.
+      val trackingTarget = contain(cutoff + opponent.velocity.value * .30, 1.5)
+      Decision.CoverShotLane(carrier, ring, Position(trackingTarget))
+    else if teamSize > 2 && advanced > 0 && pressure then
+      Decision.Press(carrier, Position(cutoff))
     else if pressure && hasCover && advanced > 0 then
       val flank = if toCarrier.x * goalward <= 2.5 then 0.0
         else if defender.position.value.y < point.y then -2.4 else 2.4
@@ -75,10 +112,7 @@ private[matches] object DefensePlanner:
     else if advanced > 27 || advanced <= 0 then
       Decision.HoldGoal(Position(Vec3(goalX - goalward * 4, 0, 10)))
     else
-      val gate = pitch.rings.maxBy { ring =>
-        val target = Vec3(goalX, ring.y, ring.height) - prediction
-        Direction.from(target).getOrElse(opponent.facing).value.dot(opponent.facing.value) - target.length * .012
-      }
+      val gate = threatenedRing(opponent, prediction, goalX)
       val center = Vec3(goalX, gate.y, gate.height)
       val span = math.abs(center.x - prediction.x)
       val fraction = clamp(1 - 4 / math.max(.1, span), .35, .88)
@@ -126,7 +160,8 @@ private[matches] object DefensePlanner:
 
   def interceptPosition(ball: PredictedBall): Vec3 = contain(ball.motion.position.value - bodyCenter, 1.5)
 
-  private def projectFlight(athlete: Athlete, start: AthleteState, target: Vec3, ticks: Int): AthleteState =
+  private def projectFlight(athlete: Athlete, start: AthleteState, target: Vec3, ticks: Int,
+      sprint: Boolean = false): AthleteState =
     (1 to ticks).foldLeft(start) { (state, _) =>
-      FlightRules.moveAthlete(athlete, state, Some(flightTo(state.flight, target)), carrying = false)
+      FlightRules.moveAthlete(athlete, state, Some(flightTo(state.flight, target, sprint)), carrying = false)
     }
